@@ -1,194 +1,323 @@
 <?php
+require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../dao/ProductDAO.php';
-require_once __DIR__ . '/../models/Product.php';
+require_once __DIR__ . '/../dao/ProductImageDAO.php';
+require_once __DIR__ . '/../dao/ProductRelationDAO.php';
+require_once __DIR__ . '/../dto/ProductDTO.php';
+require_once __DIR__ . '/../dto/ProductImageDTO.php';
+require_once __DIR__ . '/../dto/ProductRelationDTO.php';
 
-class ProductService {
-    private $productDAO;
+class ProductService
+{
+    private ProductDAO $productDAO;
+    private ProductImageDAO $imageDAO;
+    private ProductRelationDAO $relationDAO;
 
-    public function __construct() {
-        $this->productDAO = new ProductDAO();
+    public function __construct()
+    {
+        $pdo = Database::getConnection();
+        $this->productDAO = new ProductDAO($pdo);
+        $this->imageDAO = new ProductImageDAO($pdo);
+        $this->relationDAO = new ProductRelationDAO($pdo);
+    }
+    /**
+     * Get all products.
+     * @return ProductDTO[]
+     */
+    public function getAll(): array
+    {
+        $rows = $this->productDAO->findAll('created_at', 'DESC');
+        return array_map([ProductDTO::class, 'fromArray'], $rows);
     }
 
-    public function getPaginatedProducts($search, $per_page, $current_page) {
-        if (!in_array($per_page, [10, 25, 50])) $per_page = 10;
-        $offset = ($current_page - 1) * $per_page;
-
-        $total_records = $this->productDAO->getTotalCount($search);
-        $total_pages = ceil($total_records / $per_page);
-        $products = $this->productDAO->getAll($search, $per_page, $offset);
-
-        return [
-            'products' => $products,
-            'pagination' => [
-                'current_page' => $current_page,
-                'per_page' => $per_page,
-                'total_records' => $total_records,
-                'total_pages' => $total_pages,
-                'search' => $search
-            ]
-        ];
+    /**
+     * Get a single product by ID.
+     */
+    public function getById(int $id): ?ProductDTO
+    {
+        $row = $this->productDAO->findById($id);
+        return $row ? ProductDTO::fromArray($row) : null;
     }
 
-    public function getProductById($id) {
-        return $this->productDAO->getById($id);
+    /**
+     * Find a product by slug.
+     */
+    public function getBySlug(string $slug): ?ProductDTO
+    {
+        $row = $this->productDAO->findBySlug($slug);
+        return $row ? ProductDTO::fromArray($row) : null;
     }
 
-    public function createProduct($data, $file) {
-        $product = new Product(
-            null,
-            $data['productName'] ?? '',
-            $data['description'] ?? '',
-            $data['price'] ?? 0,
-            $data['discountRate'] ?? 0,
-            $data['quantity'] ?? 0,
-            $data['publisher'] ?? '',
-            $data['size'] ?? '',
-            $data['pageNum'] ?? 0,
-            $data['category'] ?? '',
-            $data['keywords'] ?? '',
-            $data['format'] ?? '',
-            $data['author'] ?? '',
-            $data['language'] ?? '',
-            $data['yearOfPublication'] ?? 0,
-            $data['status'] ?? 'Available'
-        );
-
-        if ($this->productDAO->create($product)) {
-            $productId = $this->productDAO->getLastInsertId();
-            
-            // Upload image if provided
-            if ($file && isset($file['tmp_name']) && $file['error'] === UPLOAD_ERR_OK) {
-                $this->uploadProductImage($productId, $file);
-            }
-            
-            return true;
-        }
-        return false;
+    /**
+     * Get active products by category.
+     * @return ProductDTO[]
+     */
+    public function getByCategory(int $categoryId): array
+    {
+        $rows = $this->productDAO->findByCategory($categoryId);
+        return array_map([ProductDTO::class, 'fromArray'], $rows);
     }
 
-    public function updateProduct($id, $data, $file) {
-        $product = new Product(
-            $id,
-            $data['productName'] ?? '',
-            $data['description'] ?? '',
-            $data['price'] ?? 0,
-            $data['discountRate'] ?? 0,
-            $data['quantity'] ?? 0,
-            $data['publisher'] ?? '',
-            $data['size'] ?? '',
-            $data['pageNum'] ?? 0,
-            $data['category'] ?? '',
-            $data['keywords'] ?? '',
-            $data['format'] ?? '',
-            $data['author'] ?? '',
-            $data['language'] ?? '',
-            $data['yearOfPublication'] ?? 0,
-            $data['status'] ?? 'Available'
-        );
+    /**
+     * Get products with a specific badge.
+     * @return ProductDTO[]
+     */
+    public function getByBadge(string $badge, int $limit = 10): array
+    {
+        $rows = $this->productDAO->findByBadge($badge, $limit);
+        return array_map([ProductDTO::class, 'fromArray'], $rows);
+    }
 
-        $result = $this->productDAO->update($product);
-        
-        // Upload new image if provided
-        if ($file && isset($file['tmp_name']) && $file['error'] === UPLOAD_ERR_OK) {
-            $this->uploadProductImage($id, $file);
-        }
-        
+    /**
+     * Search products with pagination.
+     * Returns ['data' => ProductDTO[], 'total', 'page', 'limit']
+     */
+    public function search(string $keyword, int $page = 1, int $limit = 20): array
+    {
+        $result = $this->productDAO->search($keyword, $page, $limit);
+        $result['data'] = array_map([ProductDTO::class, 'fromArray'], $result['data']);
         return $result;
     }
 
-    public function deleteProduct($id) {
+    /**
+     * Paginate products with optional conditions.
+     * Returns ['data' => ProductDTO[], 'total', 'page', 'limit']
+     */
+    public function paginate(int $page = 1, int $limit = 20, array $conditions = []): array
+    {
+        $result = $this->productDAO->paginate($page, $limit, $conditions, 'created_at', 'DESC');
+        $result['data'] = array_map([ProductDTO::class, 'fromArray'], $result['data']);
+        return $result;
+    }
+
+    /**
+     * Create a new product.
+     * Returns the new product ID.
+     */
+    public function create(array $data): int
+    {
+        $dto = new ProductDTO(
+            null,
+            isset($data['category_id']) ? (int) $data['category_id'] : null,
+            trim($data['name'] ?? ''),
+            trim($data['slug'] ?? $this->generateSlug($data['name'] ?? '')),
+            trim($data['description'] ?? ''),
+            (float) ($data['price'] ?? 0),
+            (int) ($data['stock'] ?? 0),
+            $data['badge'] ?? 'none',
+            isset($data['is_active']) ? (bool) $data['is_active'] : true
+        );
+
+        return $this->productDAO->insert($dto->toArray());
+    }
+
+    /**
+     * Update an existing product.
+     */
+    public function update(int $id, array $data): int
+    {
+        $updateData = [];
+
+        if (isset($data['category_id']))
+            $updateData['category_id'] = (int) $data['category_id'];
+        if (isset($data['name']))
+            $updateData['name'] = trim($data['name']);
+        if (isset($data['slug']))
+            $updateData['slug'] = trim($data['slug']);
+        if (isset($data['description']))
+            $updateData['description'] = trim($data['description']);
+        if (isset($data['price']))
+            $updateData['price'] = (float) $data['price'];
+        if (isset($data['stock']))
+            $updateData['stock'] = (int) $data['stock'];
+        if (isset($data['badge']))
+            $updateData['badge'] = $data['badge'];
+        if (isset($data['is_active']))
+            $updateData['is_active'] = $data['is_active'] ? 1 : 0;
+
+        if (empty($updateData))
+            return 0;
+
+        return $this->productDAO->update($id, $updateData);
+    }
+
+    /**
+     * Delete a product and its images/relations.
+     */
+    public function delete(int $id): int
+    {
+        // Delete associated images from disk
+        $images = $this->imageDAO->findByProduct($id);
+        foreach ($images as $img) {
+            $filePath = __DIR__ . '/../../' . $img['url'];
+            if (file_exists($filePath)) {
+                unlink($filePath);
+            }
+        }
+
+        // Delete DB records (images first due to FK)
+        $this->imageDAO->deleteByProduct($id);
         return $this->productDAO->delete($id);
     }
 
-    public function getProductImages($productId) {
-        return $this->productDAO->getProductImages($productId);
+    /**
+     * Count total products.
+     */
+    public function count(array $conditions = []): int
+    {
+        return $this->productDAO->count($conditions);
     }
 
-    public function addImage($productId, $file) {
-        if ($file && $file['error'] === UPLOAD_ERR_OK) {
-            return $this->uploadProductImage($productId, $file);
-        }
-        return false;
+    // ══════════════════════════════════════════════════════════
+    //  PRODUCT IMAGES
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * Get all images for a product.
+     * @return ProductImageDTO[]
+     */
+    public function getImages(int $productId): array
+    {
+        $rows = $this->imageDAO->findByProduct($productId);
+        return array_map([ProductImageDTO::class, 'fromArray'], $rows);
     }
 
-    public function deleteImage($imageId) {
-        return $this->productDAO->deleteImage($imageId);
+    /**
+     * Get a product's primary image.
+     */
+    public function getPrimaryImage(int $productId): ?ProductImageDTO
+    {
+        $row = $this->imageDAO->findPrimary($productId);
+        return $row ? ProductImageDTO::fromArray($row) : null;
     }
 
-    public function setPrimaryImage($productId, $imageId) {
-        return $this->productDAO->setPrimaryImage($productId, $imageId);
-    }
+    /**
+     * Upload and store a product image.
+     * Returns the new image ID on success, false on failure.
+     */
+    public function uploadImage(int $productId, array $file): int|false
+    {
+        if (!isset($file['tmp_name']) || $file['error'] !== UPLOAD_ERR_OK) {
+            return false;
+        }
 
-    private function uploadProductImage($productId, $imageFile) {
-        // Check if file exists
-        if (!isset($imageFile['tmp_name']) || empty($imageFile['tmp_name'])) {
-            error_log("ProductService: No tmp_name in imageFile");
+        // Validate type
+        $allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        $fileType = mime_content_type($file['tmp_name']);
+        if (!in_array($fileType, $allowed))
             return false;
-        }
-        
-        if (!file_exists($imageFile['tmp_name'])) {
-            error_log("ProductService: Temp file does not exist");
+
+        // Validate size (5MB)
+        if ($file['size'] > 5 * 1024 * 1024)
             return false;
-        }
-        
-        // Validate file type - WEBP SUPPORTED
-        $allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/jpg', 'image/webp'];
-        $fileType = mime_content_type($imageFile['tmp_name']);
-        
-        if (!in_array($fileType, $allowedTypes)) {
-            error_log("ProductService: Invalid file type: $fileType");
-            return false;
-        }
-        
-        // Validate file size (5MB max)
-        if ($imageFile['size'] > 5 * 1024 * 1024) {
-            error_log("ProductService: File too large: " . $imageFile['size']);
-            return false;
-        }
-        
-        // Create product-specific directory
+
+        // Create directory
         $uploadDir = __DIR__ . '/../../public/image/product/' . $productId . '/';
-        
-        // Create directory if it doesn't exist
-        if (!file_exists($uploadDir)) {
-            if (!mkdir($uploadDir, 0777, true)) {
-                error_log("ProductService: Failed to create directory: $uploadDir");
-                return false;
-            }
+        if (!is_dir($uploadDir)) {
+            mkdir($uploadDir, 0777, true);
         }
-        
-        // Generate unique filename
-        $extension = strtolower(pathinfo($imageFile['name'], PATHINFO_EXTENSION));
-        if (empty($extension)) {
-            $mimeToExt = [
-                'image/jpeg' => 'jpg',
-                'image/png' => 'png',
-                'image/gif' => 'gif',
-                'image/webp' => 'webp'
-            ];
-            $extension = $mimeToExt[$fileType] ?? 'jpg';
-        }
-        
-        $filename = uniqid('img_') . '_' . time() . '.' . $extension;
-        $filepath = $uploadDir . $filename;
-        
-        // Move uploaded file
-        if (move_uploaded_file($imageFile['tmp_name'], $filepath)) {
-            // Save relative path to database
-            $relativePath = 'public/image/product/' . $productId . '/' . $filename;
-            
-            if ($this->productDAO->addImage($productId, $relativePath)) {
-                return true;
-            } else {
-                error_log("ProductService: Failed to save image to database");
-                if (file_exists($filepath)) {
-                    unlink($filepath);
-                }
-                return false;
-            }
-        } else {
-            error_log("ProductService: Failed to move uploaded file");
+
+        // Generate filename
+        $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION)) ?: 'jpg';
+        $filename = uniqid('img_') . '_' . time() . '.' . $ext;
+        $destPath = $uploadDir . $filename;
+
+        if (!move_uploaded_file($file['tmp_name'], $destPath)) {
             return false;
         }
+
+        $relativePath = 'public/image/product/' . $productId . '/' . $filename;
+
+        // Check if this is the first image → make it primary
+        $existingImages = $this->imageDAO->findByProduct($productId);
+        $isPrimary = empty($existingImages) ? 1 : 0;
+
+        $imageId = $this->imageDAO->insert([
+            'product_id' => $productId,
+            'url' => $relativePath,
+            'is_primary' => $isPrimary,
+        ]);
+
+        return $imageId;
+    }
+
+    /**
+     * Set an image as the primary image for a product.
+     */
+    public function setPrimaryImage(int $productId, int $imageId): void
+    {
+        $this->imageDAO->setPrimary($productId, $imageId);
+    }
+
+    /**
+     * Delete a product image.
+     */
+    public function deleteImage(int $imageId): int
+    {
+        $row = $this->imageDAO->findById($imageId);
+        if ($row) {
+            $filePath = __DIR__ . '/../../' . $row['url'];
+            if (file_exists($filePath)) {
+                unlink($filePath);
+            }
+        }
+        return $this->imageDAO->delete($imageId);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  PRODUCT RELATIONS
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * Get upsell products for a given product.
+     * @return ProductRelationDTO[]
+     */
+    public function getUpsells(int $productId): array
+    {
+        $rows = $this->relationDAO->findUpsells($productId);
+        return array_map([ProductRelationDTO::class, 'fromArray'], $rows);
+    }
+
+    /**
+     * Get cross-sell products for a given product.
+     * @return ProductRelationDTO[]
+     */
+    public function getCrossSells(int $productId): array
+    {
+        $rows = $this->relationDAO->findCrossSells($productId);
+        return array_map([ProductRelationDTO::class, 'fromArray'], $rows);
+    }
+
+    /**
+     * Add a product relation.
+     */
+    public function addRelation(array $data): int
+    {
+        $dto = new ProductRelationDTO(
+            null,
+            (int) $data['product_id'],
+            (int) $data['related_id'],
+            $data['type'] ?? 'crosssell',
+            (float) ($data['discount_amount'] ?? 0),
+            (int) ($data['sort_order'] ?? 0)
+        );
+        return $this->relationDAO->insert($dto->toArray());
+    }
+
+    /**
+     * Remove a product relation.
+     */
+    public function removeRelation(int $relationId): int
+    {
+        return $this->relationDAO->delete($relationId);
+    }
+
+    // ── HELPERS ──────────────────────────────────────────────
+
+    private function generateSlug(string $name): string
+    {
+        $slug = strtolower(trim($name));
+        $slug = preg_replace('/[^a-z0-9]+/', '-', $slug);
+        return trim($slug, '-');
     }
 }

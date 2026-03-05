@@ -3,7 +3,7 @@ CREATE TABLE categories (
     id          INT PRIMARY KEY AUTO_INCREMENT,
     name        VARCHAR(100) NOT NULL,
     slug        VARCHAR(100) NOT NULL UNIQUE  -- for SEO-friendly URLs
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── PRODUCTS ────────────────────────────────────────────────
 CREATE TABLE products (
@@ -19,7 +19,7 @@ CREATE TABLE products (
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (category_id) REFERENCES categories(id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── PRODUCT IMAGES ──────────────────────────────────────────
 CREATE TABLE product_images (
@@ -29,7 +29,7 @@ CREATE TABLE product_images (
     is_primary  BOOLEAN DEFAULT FALSE,
 
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── UPSELL / CROSS-SELL LINKS ────────────────────────────────
 -- Covers both "Upsell" (upgrade suggestion) and
@@ -45,7 +45,7 @@ CREATE TABLE product_relations (
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
     FOREIGN KEY (related_id) REFERENCES products(id) ON DELETE CASCADE,
     UNIQUE (product_id, related_id, type)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── BUNDLES ──────────────────────────────────────────────────
 CREATE TABLE bundles (
@@ -54,7 +54,7 @@ CREATE TABLE bundles (
     description   TEXT,
     bundle_price  DECIMAL(10,2) NOT NULL,       -- discounted total price
     is_active     BOOLEAN DEFAULT TRUE
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE bundle_items (
     id          INT PRIMARY KEY AUTO_INCREMENT,
@@ -63,7 +63,7 @@ CREATE TABLE bundle_items (
 
     FOREIGN KEY (bundle_id) REFERENCES bundles(id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── USERS ───────────────────────────────────────────────────
 CREATE TABLE users (
@@ -73,7 +73,7 @@ CREATE TABLE users (
     full_name     VARCHAR(200),
     phone         VARCHAR(20),
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── ADDRESSES ───────────────────────────────────────────────
 CREATE TABLE addresses (
@@ -86,7 +86,7 @@ CREATE TABLE addresses (
     is_default  BOOLEAN DEFAULT FALSE,
 
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── ORDERS ──────────────────────────────────────────────────
 CREATE TABLE orders (
@@ -99,7 +99,7 @@ CREATE TABLE orders (
 
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (address_id) REFERENCES addresses(id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE order_items (
     id          INT PRIMARY KEY AUTO_INCREMENT,
@@ -110,7 +110,7 @@ CREATE TABLE order_items (
 
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── CART ────────────────────────────────────────────────────
 CREATE TABLE cart_items (
@@ -123,7 +123,7 @@ CREATE TABLE cart_items (
     UNIQUE (user_id, product_id),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── DISCOUNTS / PROMO CODES ──────────────────────────────────
 CREATE TABLE discounts (
@@ -133,8 +133,8 @@ CREATE TABLE discounts (
     value           DECIMAL(10,2) NOT NULL,
     min_order       DECIMAL(10,2) DEFAULT 0,
     uses_remaining  INT DEFAULT NULL,           -- NULL = unlimited
-    expires_at      TIMESTAMP DEFAULT NULL
-);
+    expires_at      TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── INDEXES ──────────────────────────────────────────────────
 

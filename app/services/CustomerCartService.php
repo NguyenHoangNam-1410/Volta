@@ -1,434 +1,305 @@
 <?php
-require_once __DIR__ . '/../dao/ProductDAO.php';
-require_once __DIR__ . '/../dao/DiscountDAO.php';
 require_once __DIR__ . '/../../config/db.php';
+require_once __DIR__ . '/../dao/CartDAO.php';
+require_once __DIR__ . '/../dao/ProductDAO.php';
+require_once __DIR__ . '/../dao/OrderDAO.php';
+require_once __DIR__ . '/../dao/OrderItemDAO.php';
+require_once __DIR__ . '/../dao/DiscountDAO.php';
+require_once __DIR__ . '/../dao/AddressDAO.php';
+require_once __DIR__ . '/../dto/CartItemDTO.php';
+require_once __DIR__ . '/../dto/OrderDTO.php';
+require_once __DIR__ . '/../dto/DiscountDTO.php';
 
-class CustomerCartService {
-    private $productDAO;
-    private $discountDAO;
-    private $conn;
-    
-    public function __construct() {
-        $this->productDAO = new ProductDAO();
-        $this->discountDAO = new DiscountDAO();
-        $database = new Database();
-        $this->conn = $database->conn;
+class CustomerCartService
+{
+    private CartDAO $cartDAO;
+    private ProductDAO $productDAO;
+    private OrderDAO $orderDAO;
+    private OrderItemDAO $orderItemDAO;
+    private DiscountDAO $discountDAO;
+    private AddressDAO $addressDAO;
+    private PDO $pdo;
+
+    public function __construct()
+    {
+        $this->pdo = Database::getConnection();
+        $this->cartDAO = new CartDAO($this->pdo);
+        $this->productDAO = new ProductDAO($this->pdo);
+        $this->orderDAO = new OrderDAO($this->pdo);
+        $this->orderItemDAO = new OrderItemDAO($this->pdo);
+        $this->discountDAO = new DiscountDAO($this->pdo);
+        $this->addressDAO = new AddressDAO($this->pdo);
     }
-    
+
     /**
-     * Get cart items with product details
+     * Get all cart items for a user with product details.
+     * Returns ['items' => CartItemDTO[], 'subtotal' => float, 'count' => int]
      */
-    public function getCartItems($cartSession) {
-        $products = [];
-        $subtotal = 0;
-        
-        foreach ($cartSession as $productId => $quantity) {
-            $product = $this->productDAO->getById($productId);
-            if ($product) {
-                $price = $product->getPrice();
-                $discount = $product->getDiscountRate();
-                $finalPrice = $price * (1 - $discount / 100);
-                
-                $products[] = [
-                    'product' => $product,
-                    'quantity' => $quantity,
-                    'price' => $price,
-                    'discount' => $discount,
-                    'finalPrice' => $finalPrice,
-                    'totalPrice' => $finalPrice * $quantity
-                ];
-                
-                $subtotal += $finalPrice * $quantity;
-            }
+    public function getCart(int $userId): array
+    {
+        $rows = $this->cartDAO->findByUser($userId);
+        $items = array_map([CartItemDTO::class, 'fromArray'], $rows);
+        $subtotal = 0.0;
+
+        foreach ($items as $item) {
+            $subtotal += ($item->productPrice ?? 0) * $item->quantity;
         }
-        
-        return ['products' => $products, 'subtotal' => $subtotal];
+
+        return [
+            'items' => $items,
+            'subtotal' => round($subtotal, 2),
+            'count' => count($items),
+        ];
     }
-    
+
     /**
-     * Add product to cart
+     * Add a product to the cart.
+     * Returns ['success' => bool, 'message' => string]
      */
-    public function addToCart($productId, $quantity, &$cartSession) {
-        // Validate product exists
-        $product = $this->productDAO->getById($productId);
-        if (!$product) {
-            return ['success' => false, 'message' => 'Product not found'];
+    public function addItem(int $userId, int $productId, int $quantity = 1): array
+    {
+        // Validate product
+        $product = $this->productDAO->findById($productId);
+        if (!$product || !$product['is_active']) {
+            return ['success' => false, 'message' => 'Product not found or unavailable.'];
         }
-        
+
         // Check stock
-        $currentQuantity = $cartSession[$productId] ?? 0;
-        $newQuantity = $currentQuantity + $quantity;
-        
-        if ($newQuantity > $product->getQuantity()) {
-            return ['success' => false, 'message' => 'Not enough stock'];
+        if ($product['stock'] < $quantity) {
+            return ['success' => false, 'message' => 'Not enough stock available.'];
         }
-        
-        // Add to cart
-        $cartSession[$productId] = $newQuantity;
-        
-        // Calculate cart count
-        $cartCount = array_sum($cartSession);
-        
+
+        $this->cartDAO->addItem($userId, $productId, $quantity);
+
         return [
             'success' => true,
-            'message' => 'Product added to cart',
-            'cartCount' => $cartCount
+            'message' => 'Product added to cart.',
+            'cartCount' => $this->cartDAO->countItems($userId),
         ];
     }
-    
+
     /**
-     * Update cart item quantity
+     * Update quantity of a cart item.
+     * Returns ['success' => bool, 'message' => string, 'subtotal' => float]
      */
-    public function updateCartItem($productId, $quantity, &$cartSession) {
-        // Validate product exists
-        $product = $this->productDAO->getById($productId);
-        if (!$product) {
-            return ['success' => false, 'message' => 'Product not found'];
+    public function updateItem(int $userId, int $productId, int $quantity): array
+    {
+        if ($quantity <= 0) {
+            return $this->removeItem($userId, $productId);
         }
-        
+
         // Check stock
-        if ($quantity > $product->getQuantity()) {
-            return ['success' => false, 'message' => 'Not enough stock'];
+        $product = $this->productDAO->findById($productId);
+        if (!$product) {
+            return ['success' => false, 'message' => 'Product not found.'];
         }
-        
-        // Update quantity or remove if 0
-        if ($quantity > 0) {
-            $cartSession[$productId] = $quantity;
-        } else {
-            unset($cartSession[$productId]);
+
+        if ($product['stock'] < $quantity) {
+            return ['success' => false, 'message' => 'Not enough stock available.'];
         }
-        
-        // Calculate new totals
-        $price = $product->getPrice();
-        $discount = $product->getDiscountRate();
-        $finalPrice = $price * (1 - $discount / 100);
-        $itemTotal = $finalPrice * $quantity;
-        
-        // Calculate cart subtotal
-        $subtotal = $this->calculateSubtotal($cartSession);
-        $cartCount = array_sum($cartSession);
-        
+
+        $this->cartDAO->updateQuantity($userId, $productId, $quantity);
+        $cart = $this->getCart($userId);
+
         return [
             'success' => true,
-            'itemTotal' => $itemTotal,
-            'subtotal' => $subtotal,
-            'cartCount' => $cartCount
+            'message' => 'Cart updated.',
+            'subtotal' => $cart['subtotal'],
+            'cartCount' => $cart['count'],
         ];
     }
-    
+
     /**
-     * Remove product from cart
+     * Remove a product from the cart.
      */
-    public function removeFromCart($productId, &$cartSession) {
-        unset($cartSession[$productId]);
-        
-        $subtotal = $this->calculateSubtotal($cartSession);
-        $cartCount = array_sum($cartSession);
-        
+    public function removeItem(int $userId, int $productId): array
+    {
+        $this->cartDAO->removeItem($userId, $productId);
+        $cart = $this->getCart($userId);
+
         return [
             'success' => true,
-            'subtotal' => $subtotal,
-            'cartCount' => $cartCount
+            'message' => 'Item removed from cart.',
+            'subtotal' => $cart['subtotal'],
+            'cartCount' => $cart['count'],
         ];
     }
-    
+
     /**
-     * Calculate cart subtotal
+     * Clear entire cart.
      */
-    private function calculateSubtotal($cartSession) {
-        $subtotal = 0;
-        foreach ($cartSession as $id => $qty) {
-            $product = $this->productDAO->getById($id);
-            if ($product) {
-                $price = $product->getPrice();
-                $discount = $product->getDiscountRate();
-                $subtotal += $price * (1 - $discount / 100) * $qty;
-            }
-        }
-        return $subtotal;
+    public function clearCart(int $userId): void
+    {
+        $this->cartDAO->clearCart($userId);
     }
-    
+
     /**
-     * Get checkout data
+     * Get cart item count.
      */
-    public function getCheckoutData($cartSession) {
-        if (empty($cartSession)) {
+    public function getCartCount(int $userId): int
+    {
+        return $this->cartDAO->countItems($userId);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  CHECKOUT / ORDER
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * Get checkout data (cart summary + addresses).
+     */
+    public function getCheckoutData(int $userId): ?array
+    {
+        $cart = $this->getCart($userId);
+        if (empty($cart['items'])) {
             return null;
         }
-        
-        $products = [];
-        $subtotal = 0;
-        
-        foreach ($cartSession as $productId => $quantity) {
-            $product = $this->productDAO->getById($productId);
-            if ($product) {
-                $price = $product->getPrice();
-                $discount = $product->getDiscountRate();
-                $finalPrice = $price * (1 - $discount / 100);
-                
-                $products[] = [
-                    'product' => $product,
-                    'quantity' => $quantity,
-                    'finalPrice' => $finalPrice,
-                    'totalPrice' => $finalPrice * $quantity
-                ];
-                
-                $subtotal += $finalPrice * $quantity;
-            }
-        }
-        
-        // Get available discount coupons
-        $discounts = $this->discountDAO->getAll();
-        $activeDiscounts = array_filter($discounts, function($d) {
-            return $d->getStatus() === 'Activate' && $d->getQuantity() > 0;
-        });
-        
+
+        $addresses = $this->addressDAO->findByUser($userId);
+
         return [
-            'products' => $products,
-            'subtotal' => $subtotal,
-            'discounts' => $activeDiscounts
+            'items' => $cart['items'],
+            'subtotal' => $cart['subtotal'],
+            'count' => $cart['count'],
+            'addresses' => $addresses,
         ];
     }
-    
+
     /**
-     * Apply discount coupon
+     * Apply a discount code to the cart subtotal.
+     * Returns ['valid' => bool, 'amount' => float, 'total' => float, 'message' => string]
      */
-    public function applyDiscount($discountCode, $subtotal) {
-        if (empty($discountCode)) {
-            return ['success' => false, 'message' => 'Please enter a discount code'];
+    public function applyDiscount(string $code, float $subtotal): array
+    {
+        $row = $this->discountDAO->findByCode($code);
+        if (!$row) {
+            return ['valid' => false, 'amount' => 0, 'total' => $subtotal, 'message' => 'Invalid discount code.'];
         }
-        
-        // Get discount from database
-        $discount = $this->discountDAO->getByCode($discountCode);
-        
-        if (!$discount) {
-            return ['success' => false, 'message' => 'Invalid discount code'];
+
+        $discount = DiscountDTO::fromArray($row);
+
+        if (!$discount->isValid()) {
+            return ['valid' => false, 'amount' => 0, 'total' => $subtotal, 'message' => 'Discount code has expired or is used up.'];
         }
-        
-        if ($discount->getStatus() !== 'Activate') {
-            return ['success' => false, 'message' => 'This discount code is not active'];
+
+        if ($subtotal < $discount->minOrder) {
+            return [
+                'valid' => false,
+                'amount' => 0,
+                'total' => $subtotal,
+                'message' => 'Minimum order amount is ' . number_format($discount->minOrder, 2) . '.',
+            ];
         }
-        
-        if ($discount->getQuantity() <= 0) {
-            return ['success' => false, 'message' => 'This discount code is no longer available'];
-        }
-        
-        // Check condition
-        $condition = $discount->getCondition();
-        
-        // Parse numeric conditions like "> 200000", "< 500000"
-        if (preg_match('/^>\s*(\d+)$/', $condition, $matches)) {
-            $minAmount = floatval($matches[1]);
-            if ($subtotal <= $minAmount) {
-                return [
-                    'success' => false,
-                    'message' => "Minimum order amount must be greater than " . number_format($minAmount, 0, ',', '.') . " ₫"
-                ];
-            }
-        } elseif (preg_match('/^<\s*(\d+)$/', $condition, $matches)) {
-            $maxAmount = floatval($matches[1]);
-            if ($subtotal >= $maxAmount) {
-                return [
-                    'success' => false,
-                    'message' => "Maximum order amount must be less than " . number_format($maxAmount, 0, ',', '.') . " ₫"
-                ];
-            }
-        }
-        
-        $discountAmount = floatval($discount->getMoneyDeduct());
-        $total = max(0, $subtotal - $discountAmount);
-        
+
+        $discountAmount = $discount->calculate($subtotal);
+        $total = round($subtotal - $discountAmount, 2);
+
         return [
-            'success' => true,
-            'discountAmount' => $discountAmount,
+            'valid' => true,
+            'amount' => $discountAmount,
             'total' => $total,
-            'discountCode' => $discountCode
+            'message' => 'Discount applied successfully.',
+            'discountId' => $discount->id,
         ];
     }
-    
+
     /**
-     * Place order
+     * Place an order from the user's cart.
+     * Returns ['success' => bool, 'message' => string, 'orderId' => ?int]
      */
-    public function placeOrder($orderData, $cartSession) {
-        if (empty($cartSession)) {
-            return ['success' => false, 'message' => 'Cart is empty'];
+    public function placeOrder(int $userId, array $orderData): array
+    {
+        $cart = $this->getCart($userId);
+
+        if (empty($cart['items'])) {
+            return ['success' => false, 'message' => 'Cart is empty.', 'orderId' => null];
         }
-        
-        // Validate required fields
-        if (empty($orderData['customer_name']) || empty($orderData['customer_phone']) || empty($orderData['customer_address'])) {
-            return ['success' => false, 'message' => 'Please fill in all required fields'];
-        }
-        
-        try {
-            // Start transaction
-            $this->conn->begin_transaction();
-            
-            // 1. Create or get customer
-            $customerId = $this->createOrGetCustomer(
-                $orderData['customer_name'],
-                $orderData['customer_phone'],
-                $orderData['customer_address']
-            );
-            
-            // 2. Create order
-            $orderId = $this->createOrder(
-                $customerId,
-                $orderData['subtotal'],
-                $orderData['discount_code'],
-                $orderData['customer_phone'],
-                $orderData['customer_address'],
-                $orderData['customer_name'],
-                $orderData['payment_method'],
-                $orderData['total']
-            );
-            
-            // 3. Add order items and update stock
-            $this->addOrderItems($orderId, $cartSession);
-            
-            // 4. Update discount quantity if used
-            if (!empty($orderData['discount_code'])) {
-                $this->updateDiscountQuantity($orderData['discount_code']);
+
+        $addressId = isset($orderData['address_id']) ? (int) $orderData['address_id'] : null;
+        $discountCode = $orderData['discount_code'] ?? null;
+        $subtotal = $cart['subtotal'];
+        $totalPrice = $subtotal;
+
+        // Apply discount if provided
+        $discountId = null;
+        if ($discountCode) {
+            $discountResult = $this->applyDiscount($discountCode, $subtotal);
+            if ($discountResult['valid']) {
+                $totalPrice = $discountResult['total'];
+                $discountId = $discountResult['discountId'] ?? null;
             }
-            
-            // Commit transaction
-            $this->conn->commit();
-            
+        }
+
+        try {
+            $this->pdo->beginTransaction();
+
+            // 1. Create order
+            $orderId = $this->orderDAO->insert([
+                'user_id' => $userId,
+                'address_id' => $addressId,
+                'status' => 'pending',
+                'total_price' => $totalPrice,
+            ]);
+
+            // 2. Create order items + update stock
+            $orderItems = [];
+            foreach ($cart['items'] as $item) {
+                $orderItems[] = [
+                    'product_id' => $item->productId,
+                    'quantity' => $item->quantity,
+                    'unit_price' => $item->productPrice ?? 0,
+                ];
+
+                // Decrease stock
+                $currentProduct = $this->productDAO->findById($item->productId);
+                if ($currentProduct) {
+                    $newStock = max(0, $currentProduct['stock'] - $item->quantity);
+                    $this->productDAO->update($item->productId, ['stock' => $newStock]);
+                }
+            }
+
+            $this->orderItemDAO->insertMany($orderId, $orderItems);
+
+            // 3. Decrement discount usage
+            if ($discountId) {
+                $this->discountDAO->decrementUse($discountId);
+            }
+
+            // 4. Clear cart
+            $this->cartDAO->clearCart($userId);
+
+            $this->pdo->commit();
+
             return [
                 'success' => true,
-                'message' => 'Order placed successfully',
-                'orderId' => $orderId
+                'message' => 'Order placed successfully.',
+                'orderId' => $orderId,
             ];
-            
-        } catch (Exception $e) {
-            // Rollback on error
-            $this->conn->rollback();
-            error_log("Place order error: " . $e->getMessage());
-            
+
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            error_log('CustomerCartService::placeOrder error: ' . $e->getMessage());
+
             return [
                 'success' => false,
                 'message' => 'Failed to place order. Please try again.',
-                'error' => $e->getMessage()
+                'orderId' => null,
             ];
         }
     }
-    
+
     /**
-     * Create or get customer
+     * Get order details (for order success page).
      */
-    private function createOrGetCustomer($name, $phone, $address) {
-        // Check if customer exists by phone
-        $sql = "SELECT l.UID FROM LOGIN l 
-                INNER JOIN CUSTOMER k ON l.UID = k.UID 
-                WHERE k.PhoneNum = ? LIMIT 1";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->bind_param("s", $phone);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        
-        if ($row = $result->fetch_assoc()) {
-            // Existing customer
-            $customerId = $row['UID'];
-            
-            // Update customer info
-            $updateSql = "UPDATE CUSTOMER SET Address = ? WHERE UID = ?";
-            $updateStmt = $this->conn->prepare($updateSql);
-            $updateStmt->bind_param("si", $address, $customerId);
-            $updateStmt->execute();
-            
-            return $customerId;
-        } else {
-            // New guest customer
-            $email = 'guest_' . time() . '@guest.com';
-            $password = password_hash(bin2hex(random_bytes(16)), PASSWORD_DEFAULT);
-            $role = 'Customer';
-            
-            $loginSql = "INSERT INTO LOGIN (Email, Password, Role, Name, Avatar) VALUES (?, ?, ?, ?, NULL)";
-            $loginStmt = $this->conn->prepare($loginSql);
-            $loginStmt->bind_param("ssss", $email, $password, $role, $name);
-            $loginStmt->execute();
-            $customerId = $this->conn->insert_id;
-            
-            // Create CUSTOMER entry
-            $customerSql = "INSERT INTO CUSTOMER (UID, PhoneNum, Address, Status) VALUES (?, ?, ?, 'Active')";
-            $customerStmt = $this->conn->prepare($customerSql);
-            $customerStmt->bind_param("iss", $customerId, $phone, $address);
-            $customerStmt->execute();
-            
-            return $customerId;
-        }
-    }
-    
-    /**
-     * Create order in database
-     */
-    private function createOrder($customerId, $subtotal, $discountCode, $phone, $address, $receiverName, $paymentMethod, $total) {
-        $orderDate = date('Y-m-d H:i:s');
-        $status = 'Pending';
-        $transaction = 'Unpaid';
-        
-        $sql = "INSERT INTO `ORDER` 
-                (UID, OrderDate, Total, DiscountCoupon, Status, PhoneNum, Address, Transaction, ReceiverName, PaymentMethod, Bill) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        
-        $stmt = $this->conn->prepare($sql);
-        $stmt->bind_param(
-            "isdsssssssd",
-            $customerId,
-            $orderDate,
-            $subtotal,
-            $discountCode,
-            $status,
-            $phone,
-            $address,
-            $transaction,
-            $receiverName,
-            $paymentMethod,
-            $total
-        );
-        $stmt->execute();
-        
-        return $this->conn->insert_id;
-    }
-    
-    /**
-     * Add order items and update product stock
-     */
-    private function addOrderItems($orderId, $cartSession) {
-        foreach ($cartSession as $productId => $quantity) {
-            // Insert into CONTAIN
-            $sql = "INSERT INTO CONTAIN (Order_ID, Product_ID, Quantity) VALUES (?, ?, ?)";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->bind_param("iii", $orderId, $productId, $quantity);
-            $stmt->execute();
-            
-            // Update product stock
-            $stockSql = "UPDATE PRODUCT SET Quantity = Quantity - ? WHERE Product_ID = ?";
-            $stockStmt = $this->conn->prepare($stockSql);
-            $stockStmt->bind_param("ii", $quantity, $productId);
-            $stockStmt->execute();
-        }
-    }
-    
-    /**
-     * Update discount quantity
-     */
-    private function updateDiscountQuantity($discountCode) {
-        $sql = "UPDATE DISCOUNT_COUPON SET Quantity = Quantity - 1 WHERE Code = ? AND Quantity > 0";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->bind_param("s", $discountCode);
-        $stmt->execute();
-    }
-    
-    /**
-     * Get order details
-     */
-    public function getOrderDetails($orderId) {
-        $sql = "SELECT * FROM `ORDER` WHERE Order_ID = ?";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->bind_param("i", $orderId);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        
-        return $result->fetch_assoc();
+    public function getOrderDetails(int $orderId): ?array
+    {
+        $data = $this->orderDAO->findWithItems($orderId);
+        if (!$data)
+            return null;
+
+        return [
+            'order' => OrderDTO::fromArray($data),
+            'items' => $data['items'] ?? [],
+        ];
     }
 }

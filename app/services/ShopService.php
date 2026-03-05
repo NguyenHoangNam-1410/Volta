@@ -1,53 +1,106 @@
 <?php
+require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../dao/ProductDAO.php';
+require_once __DIR__ . '/../dao/ProductImageDAO.php';
+require_once __DIR__ . '/../dao/CategoryDAO.php';
+require_once __DIR__ . '/../dto/ProductDTO.php';
+require_once __DIR__ . '/../dto/ProductImageDTO.php';
+require_once __DIR__ . '/../dto/CategoryDTO.php';
 
-class ShopService {
-    private $productDAO;
+class ShopService
+{
+    private ProductDAO $productDAO;
+    private ProductImageDAO $imageDAO;
+    private CategoryDAO $categoryDAO;
 
-    public function __construct() {
-        $this->productDAO = new ProductDAO();
+    public function __construct()
+    {
+        $pdo = Database::getConnection();
+        $this->productDAO = new ProductDAO($pdo);
+        $this->imageDAO = new ProductImageDAO($pdo);
+        $this->categoryDAO = new CategoryDAO($pdo);
     }
 
-    public function getPaginatedProducts($search, $category, $per_page, $current_page) {
-        $offset = ($current_page - 1) * $per_page;
-        $total_records = $this->productDAO->getTotalCount($search);
-        $total_pages = ceil($total_records / $per_page);
+    // ── SHOP LISTING ─────────────────────────────────────────
 
-        $allProducts = $this->productDAO->getAll($search, $per_page, $offset);
+    /**
+     * Get paginated active products for the storefront.
+     * Returns ['data' => ProductDTO[], 'images' => [...], 'total', 'page', 'limit']
+     */
+    public function getProducts(int $page = 1, int $limit = 12, ?int $categoryId = null, ?string $search = null): array
+    {
+        if ($search) {
+            $result = $this->productDAO->search($search, $page, $limit);
+        } elseif ($categoryId) {
+            // Manual pagination for category filter
+            $allRows = $this->productDAO->findByCategory($categoryId);
+            $total = count($allRows);
+            $offset = ($page - 1) * $limit;
+            $data = array_slice($allRows, $offset, $limit);
+            $result = ['data' => $data, 'total' => $total, 'page' => $page, 'limit' => $limit];
+        } else {
+            $result = $this->productDAO->paginate($page, $limit, ['is_active' => 1], 'created_at', 'DESC');
+        }
 
-        $products = array_filter($allProducts, function($product) {
-            return $product->getStatus() === 'Available';
-        });
+        // Map to DTOs
+        $products = array_map([ProductDTO::class, 'fromArray'], $result['data']);
 
-        $productImages = [];
-        foreach ($products as $product) {
-            $productImages[$product->getId()] = $this->productDAO->getFirstImage($product->getId());
+        // Load primary images
+        $images = [];
+        foreach ($products as $dto) {
+            $imgRow = $this->imageDAO->findPrimary($dto->id);
+            $images[$dto->id] = $imgRow ? ProductImageDTO::fromArray($imgRow) : null;
         }
 
         return [
-            'products' => $products,
-            'images' => $productImages,
-            'pagination' => [
-                'current_page' => $current_page,
-                'per_page' => $per_page,
-                'total_records' => $total_records,
-                'total_pages' => $total_pages,
-                'search' => $search,
-                'category' => $category
-            ]
+            'data' => $products,
+            'images' => $images,
+            'total' => $result['total'],
+            'page' => $result['page'],
+            'limit' => $result['limit'],
         ];
     }
 
-    public function getProductDetail($id) {
-        $product = $this->productDAO->getById($id);
-        if (!$product || $product->getStatus() !== 'Available') {
+    /**
+     * Get full product detail for the product page.
+     * Returns ['product' => ProductDTO, 'images' => ProductImageDTO[], 'upsells' => [...], 'crosssells' => [...]]
+     */
+    public function getProductDetail(int $id): ?array
+    {
+        $row = $this->productDAO->findById($id);
+        if (!$row || !$row['is_active']) {
             return null;
         }
 
-        $productImages = $this->productDAO->getProductImages($id);
+        $product = ProductDTO::fromArray($row);
+
+        // All images
+        $imageRows = $this->imageDAO->findByProduct($id);
+        $images = array_map([ProductImageDTO::class, 'fromArray'], $imageRows);
+
         return [
             'product' => $product,
-            'images' => $productImages
+            'images' => $images,
         ];
+    }
+
+    /**
+     * Get all categories for the shop sidebar/filter.
+     * @return CategoryDTO[]
+     */
+    public function getCategories(): array
+    {
+        $rows = $this->categoryDAO->findAll('name', 'ASC');
+        return array_map([CategoryDTO::class, 'fromArray'], $rows);
+    }
+
+    /**
+     * Get featured products by badge.
+     * @return ProductDTO[]
+     */
+    public function getFeatured(string $badge = 'hot', int $limit = 8): array
+    {
+        $rows = $this->productDAO->findByBadge($badge, $limit);
+        return array_map([ProductDTO::class, 'fromArray'], $rows);
     }
 }
