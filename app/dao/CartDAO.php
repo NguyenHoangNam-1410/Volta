@@ -12,7 +12,7 @@ class CartDAO extends BaseDAO
     public function findByUser(int $userId): array
     {
         $stmt = $this->pdo->prepare(
-            "SELECT ci.*, p.name, p.slug, p.price, p.stock,
+            "SELECT ci.*, 'product' AS item_type, p.name, p.slug, p.price, p.stock,
                     (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id AND pi.is_primary = 1 LIMIT 1) AS image_url
              FROM {$this->table} ci
              JOIN products p ON ci.product_id = p.id

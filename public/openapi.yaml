@@ -205,12 +205,17 @@ components:
       type: object
       properties:
         id:            { type: integer }
+        item_type:     { type: string, enum: [product, bundle] }
+        item_id:       { type: integer }
         product_id:    { type: integer }
+        bundle_id:     { type: integer, nullable: true }
         quantity:      { type: integer }
         product_name:  { type: string }
         product_slug:  { type: string }
         product_price: { type: number, format: float }
         product_stock: { type: integer }
+        bundle_name:   { type: string, nullable: true }
+        bundle_price:  { type: number, format: float, nullable: true }
         image_url:     { type: string, nullable: true }
         line_total:    { type: number, format: float }
 
@@ -1342,9 +1347,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [product_id]
+              required: [quantity]
               properties:
+                item_type:  { type: string, enum: [product, bundle], default: product }
                 product_id: { type: integer }
+                bundle_id:  { type: integer }
                 quantity:   { type: integer, minimum: 1, default: 1 }
       responses:
         "201":
@@ -1371,9 +1378,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [product_id, quantity]
+              required: [quantity]
               properties:
+                item_type:  { type: string, enum: [product, bundle], default: product }
                 product_id: { type: integer }
+                bundle_id:  { type: integer }
                 quantity:   { type: integer, minimum: 0 }
       responses:
         "200":
@@ -1391,12 +1400,15 @@ paths:
                           subtotal:  { type: number, format: float }
                           cartCount: { type: integer }
 
-  /api/cart/items/{productId}:
+  /api/cart/items/{itemId}:
     parameters:
-      - name: productId
+      - name: itemId
         in: path
         required: true
         schema: { type: integer }
+      - name: item_type
+        in: query
+        schema: { type: string, enum: [product, bundle], default: product }
 
     delete:
       tags: [Cart]

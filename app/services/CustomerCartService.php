@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../dao/CartDAO.php';
 require_once __DIR__ . '/../dao/ProductDAO.php';
+require_once __DIR__ . '/../dao/BundleDAO.php';
 require_once __DIR__ . '/../dao/OrderDAO.php';
 require_once __DIR__ . '/../dao/OrderItemDAO.php';
 require_once __DIR__ . '/../dao/DiscountDAO.php';
@@ -14,6 +15,7 @@ class CustomerCartService
 {
     private CartDAO $cartDAO;
     private ProductDAO $productDAO;
+    private BundleDAO $bundleDAO;
     private OrderDAO $orderDAO;
     private OrderItemDAO $orderItemDAO;
     private DiscountDAO $discountDAO;
@@ -25,6 +27,7 @@ class CustomerCartService
         $this->pdo = Database::getConnection();
         $this->cartDAO = new CartDAO($this->pdo);
         $this->productDAO = new ProductDAO($this->pdo);
+        $this->bundleDAO = new BundleDAO($this->pdo);
         $this->orderDAO = new OrderDAO($this->pdo);
         $this->orderItemDAO = new OrderItemDAO($this->pdo);
         $this->discountDAO = new DiscountDAO($this->pdo);
@@ -35,15 +38,26 @@ class CustomerCartService
     {
         $cart = $_SESSION['guest_cart'] ?? [];
         if (!is_array($cart)) {
-            return [];
+            return ['products' => [], 'bundles' => []];
         }
 
-        return $cart;
+        // Backward compatibility: old format was productId => qty.
+        if (!isset($cart['products']) && !isset($cart['bundles'])) {
+            return ['products' => $cart, 'bundles' => []];
+        }
+
+        return [
+            'products' => is_array($cart['products'] ?? null) ? $cart['products'] : [],
+            'bundles' => is_array($cart['bundles'] ?? null) ? $cart['bundles'] : [],
+        ];
     }
 
     private function setGuestCartMap(array $cart): void
     {
-        $_SESSION['guest_cart'] = $cart;
+        $_SESSION['guest_cart'] = [
+            'products' => is_array($cart['products'] ?? null) ? $cart['products'] : [],
+            'bundles' => is_array($cart['bundles'] ?? null) ? $cart['bundles'] : [],
+        ];
     }
 
     private function getPrimaryImageUrl(int $productId): ?string
@@ -57,11 +71,11 @@ class CustomerCartService
         return $url !== false ? (string) $url : null;
     }
 
-    private function buildGuestCartRows(array $guestCart): array
+    private function buildGuestProductRows(array $guestProducts): array
     {
         $rows = [];
 
-        foreach ($guestCart as $productId => $qty) {
+        foreach ($guestProducts as $productId => $qty) {
             $productId = (int) $productId;
             $qty = (int) $qty;
 
@@ -77,7 +91,9 @@ class CustomerCartService
             $rows[] = [
                 'id' => null,
                 'user_id' => null,
+                'item_type' => 'product',
                 'product_id' => $productId,
+                'bundle_id' => null,
                 'quantity' => $qty,
                 'added_at' => date('Y-m-d H:i:s'),
                 'name' => $product['name'] ?? null,
@@ -91,23 +107,160 @@ class CustomerCartService
         return $rows;
     }
 
+    private function buildGuestBundleRows(array $guestBundles): array
+    {
+        $rows = [];
+
+        foreach ($guestBundles as $bundleId => $qty) {
+            $bundleId = (int) $bundleId;
+            $qty = (int) $qty;
+
+            if ($bundleId <= 0 || $qty <= 0) {
+                continue;
+            }
+
+            $bundle = $this->bundleDAO->findWithItems($bundleId);
+            if (!$bundle || !(bool) ($bundle['is_active'] ?? false)) {
+                continue;
+            }
+
+            // Validate stock for all products in this bundle.
+            $inStock = true;
+            foreach (($bundle['items'] ?? []) as $bundleItem) {
+                $stock = (int) ($bundleItem['stock'] ?? 0);
+                if ($stock < $qty) {
+                    $inStock = false;
+                    break;
+                }
+            }
+            if (!$inStock) {
+                continue;
+            }
+
+            $rows[] = [
+                'id' => null,
+                'user_id' => null,
+                'item_type' => 'bundle',
+                'product_id' => null,
+                'bundle_id' => $bundleId,
+                'quantity' => $qty,
+                'added_at' => date('Y-m-d H:i:s'),
+                'bundle_name' => $bundle['name'] ?? null,
+                'bundle_price' => $bundle['bundle_price'] ?? null,
+                'image_url' => $bundle['items'][0]['image_url'] ?? null,
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function getBundleWithItems(int $bundleId): ?array
+    {
+        $bundle = $this->bundleDAO->findWithItems($bundleId);
+        if (!$bundle || !(bool) ($bundle['is_active'] ?? false)) {
+            return null;
+        }
+
+        return $bundle;
+    }
+
+    private function assertBundleStock(array $bundle, int $bundleQty): bool
+    {
+        if ($bundleQty <= 0) {
+            return false;
+        }
+
+        foreach (($bundle['items'] ?? []) as $item) {
+            $stock = (int) ($item['stock'] ?? 0);
+            if ($stock < $bundleQty) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function buildBundleUnitPriceMap(array $bundleItems, float $bundlePrice): array
+    {
+        $lines = [];
+        foreach ($bundleItems as $item) {
+            $pid = (int) ($item['product_id'] ?? 0);
+            if ($pid <= 0) {
+                continue;
+            }
+
+            if (!isset($lines[$pid])) {
+                $lines[$pid] = [
+                    'product_id' => $pid,
+                    'unit_base' => 0.0,
+                    'qty_per_bundle' => 0,
+                ];
+            }
+
+            $lines[$pid]['unit_base'] += (float) ($item['price'] ?? 0);
+            $lines[$pid]['qty_per_bundle']++;
+        }
+
+        if (empty($lines)) {
+            return [];
+        }
+
+        $totalBase = array_sum(array_column($lines, 'unit_base'));
+        $remaining = round($bundlePrice, 2);
+        $allocated = [];
+        $keys = array_keys($lines);
+
+        foreach ($keys as $idx => $pid) {
+            if ($idx === count($keys) - 1) {
+                $allocated[$pid] = max(0, $remaining);
+                break;
+            }
+
+            if ($totalBase > 0) {
+                $portion = round(($lines[$pid]['unit_base'] / $totalBase) * $bundlePrice, 2);
+            } else {
+                $portion = round($bundlePrice / count($keys), 2);
+            }
+
+            $allocated[$pid] = $portion;
+            $remaining = round($remaining - $portion, 2);
+        }
+
+        foreach ($allocated as $pid => $linePrice) {
+            $qtyPerBundle = max(1, (int) $lines[$pid]['qty_per_bundle']);
+            $allocated[$pid] = round($linePrice / $qtyPerBundle, 2);
+        }
+
+        return ['lines' => $lines, 'unit_prices' => $allocated];
+    }
+
     /**
      * Get all cart items for a user with product details.
      * Returns ['items' => CartItemDTO[], 'subtotal' => float, 'count' => int]
      */
     public function getCart(?int $userId): array
     {
+        $guestCart = $this->getGuestCartMap();
+
         if ($userId !== null) {
             $rows = $this->cartDAO->findByUser($userId);
+            $rows = array_merge($rows, $this->buildGuestBundleRows($guestCart['bundles']));
         } else {
-            $rows = $this->buildGuestCartRows($this->getGuestCartMap());
+            $rows = array_merge(
+                $this->buildGuestProductRows($guestCart['products']),
+                $this->buildGuestBundleRows($guestCart['bundles'])
+            );
         }
 
         $items = array_map([CartItemDTO::class, 'fromArray'], $rows);
         $subtotal = 0.0;
 
         foreach ($items as $item) {
-            $subtotal += ($item->productPrice ?? 0) * $item->quantity;
+            if ($item->itemType === 'bundle') {
+                $subtotal += ($item->bundlePrice ?? 0) * $item->quantity;
+            } else {
+                $subtotal += ($item->productPrice ?? 0) * $item->quantity;
+            }
         }
 
         return [
@@ -121,32 +274,68 @@ class CustomerCartService
      * Add a product to the cart.
      * Returns ['success' => bool, 'message' => string]
      */
-    public function addItem(?int $userId, int $productId, int $quantity = 1): array
+    public function addItem(?int $userId, string $itemType, int $itemId, int $quantity = 1): array
     {
-        // Validate product
-        $product = $this->productDAO->findById($productId);
-        if (!$product || !$product['is_active']) {
-            return ['success' => false, 'message' => 'Product not found or unavailable.'];
+        if (!in_array($itemType, ['product', 'bundle'], true)) {
+            return ['success' => false, 'message' => 'Invalid item type.'];
         }
 
-        // Check stock
-        if ($product['stock'] < $quantity) {
-            return ['success' => false, 'message' => 'Not enough stock available.'];
+        if ($itemType === 'product') {
+            // Validate product
+            $product = $this->productDAO->findById($itemId);
+            if (!$product || !(bool) ($product['is_active'] ?? false)) {
+                return ['success' => false, 'message' => 'Product not found or unavailable.'];
+            }
+
+            // Check stock
+            if ((int) $product['stock'] < $quantity) {
+                return ['success' => false, 'message' => 'Not enough stock available.'];
+            }
+
+            if ($userId !== null) {
+                $this->cartDAO->addItem($userId, $itemId, $quantity);
+                $cartCount = $this->cartDAO->countItems($userId) + count($this->getGuestCartMap()['bundles']);
+            } else {
+                $guestCart = $this->getGuestCartMap();
+                $guestCart['products'][$itemId] = ((int) ($guestCart['products'][$itemId] ?? 0)) + $quantity;
+                $this->setGuestCartMap($guestCart);
+                $cartCount = count($guestCart['products']) + count($guestCart['bundles']);
+            }
+
+            return [
+                'success' => true,
+                'message' => 'Product added to cart.',
+                'cartCount' => $cartCount,
+            ];
         }
+
+        // Bundle flow: always session-backed so guests and logged users can both add bundle lines.
+        $bundle = $this->getBundleWithItems($itemId);
+        if (!$bundle) {
+            return ['success' => false, 'message' => 'Bundle not found or unavailable.'];
+        }
+        if (!$this->assertBundleStock($bundle, $quantity)) {
+            return ['success' => false, 'message' => 'One or more items in this bundle are out of stock.'];
+        }
+
+        $guestCart = $this->getGuestCartMap();
+        $newQty = ((int) ($guestCart['bundles'][$itemId] ?? 0)) + $quantity;
+        if (!$this->assertBundleStock($bundle, $newQty)) {
+            return ['success' => false, 'message' => 'Not enough stock available for this bundle quantity.'];
+        }
+
+        $guestCart['bundles'][$itemId] = $newQty;
+        $this->setGuestCartMap($guestCart);
 
         if ($userId !== null) {
-            $this->cartDAO->addItem($userId, $productId, $quantity);
-            $cartCount = $this->cartDAO->countItems($userId);
+            $cartCount = $this->cartDAO->countItems($userId) + count($guestCart['bundles']);
         } else {
-            $guestCart = $this->getGuestCartMap();
-            $guestCart[$productId] = ((int) ($guestCart[$productId] ?? 0)) + $quantity;
-            $this->setGuestCartMap($guestCart);
-            $cartCount = count($guestCart);
+            $cartCount = count($guestCart['products']) + count($guestCart['bundles']);
         }
 
         return [
             'success' => true,
-            'message' => 'Product added to cart.',
+            'message' => 'Bundle added to cart.',
             'cartCount' => $cartCount,
         ];
     }
@@ -155,30 +344,59 @@ class CustomerCartService
      * Update quantity of a cart item.
      * Returns ['success' => bool, 'message' => string, 'subtotal' => float]
      */
-    public function updateItem(?int $userId, int $productId, int $quantity): array
+    public function updateItem(?int $userId, string $itemType, int $itemId, int $quantity): array
     {
         if ($quantity <= 0) {
-            return $this->removeItem($userId, $productId);
+            return $this->removeItem($userId, $itemType, $itemId);
         }
 
-        // Check stock
-        $product = $this->productDAO->findById($productId);
-        if (!$product) {
-            return ['success' => false, 'message' => 'Product not found.'];
+        if (!in_array($itemType, ['product', 'bundle'], true)) {
+            return ['success' => false, 'message' => 'Invalid item type.'];
         }
 
-        if ($product['stock'] < $quantity) {
-            return ['success' => false, 'message' => 'Not enough stock available.'];
-        }
-
-        if ($userId !== null) {
-            $this->cartDAO->updateQuantity($userId, $productId, $quantity);
-        } else {
-            $guestCart = $this->getGuestCartMap();
-            if (isset($guestCart[$productId])) {
-                $guestCart[$productId] = $quantity;
-                $this->setGuestCartMap($guestCart);
+        if ($itemType === 'product') {
+            // Check stock
+            $product = $this->productDAO->findById($itemId);
+            if (!$product) {
+                return ['success' => false, 'message' => 'Product not found.'];
             }
+
+            if ((int) $product['stock'] < $quantity) {
+                return ['success' => false, 'message' => 'Not enough stock available.'];
+            }
+
+            if ($userId !== null) {
+                $this->cartDAO->updateQuantity($userId, $itemId, $quantity);
+            } else {
+                $guestCart = $this->getGuestCartMap();
+                if (isset($guestCart['products'][$itemId])) {
+                    $guestCart['products'][$itemId] = $quantity;
+                    $this->setGuestCartMap($guestCart);
+                }
+            }
+
+            $cart = $this->getCart($userId);
+
+            return [
+                'success' => true,
+                'message' => 'Cart updated.',
+                'subtotal' => $cart['subtotal'],
+                'cartCount' => $cart['count'],
+            ];
+        }
+
+        $bundle = $this->getBundleWithItems($itemId);
+        if (!$bundle) {
+            return ['success' => false, 'message' => 'Bundle not found or unavailable.'];
+        }
+        if (!$this->assertBundleStock($bundle, $quantity)) {
+            return ['success' => false, 'message' => 'Not enough stock available for this bundle quantity.'];
+        }
+
+        $guestCart = $this->getGuestCartMap();
+        if (isset($guestCart['bundles'][$itemId])) {
+            $guestCart['bundles'][$itemId] = $quantity;
+            $this->setGuestCartMap($guestCart);
         }
 
         $cart = $this->getCart($userId);
@@ -194,13 +412,23 @@ class CustomerCartService
     /**
      * Remove a product from the cart.
      */
-    public function removeItem(?int $userId, int $productId): array
+    public function removeItem(?int $userId, string $itemType, int $itemId): array
     {
-        if ($userId !== null) {
-            $this->cartDAO->removeItem($userId, $productId);
+        if (!in_array($itemType, ['product', 'bundle'], true)) {
+            return ['success' => false, 'message' => 'Invalid item type.'];
+        }
+
+        if ($itemType === 'product') {
+            if ($userId !== null) {
+                $this->cartDAO->removeItem($userId, $itemId);
+            } else {
+                $guestCart = $this->getGuestCartMap();
+                unset($guestCart['products'][$itemId]);
+                $this->setGuestCartMap($guestCart);
+            }
         } else {
             $guestCart = $this->getGuestCartMap();
-            unset($guestCart[$productId]);
+            unset($guestCart['bundles'][$itemId]);
             $this->setGuestCartMap($guestCart);
         }
 
@@ -221,10 +449,9 @@ class CustomerCartService
     {
         if ($userId !== null) {
             $this->cartDAO->clearCart($userId);
-            return;
         }
 
-        $this->setGuestCartMap([]);
+        $this->setGuestCartMap(['products' => [], 'bundles' => []]);
     }
 
     /**
@@ -232,11 +459,13 @@ class CustomerCartService
      */
     public function getCartCount(?int $userId): int
     {
+        $guestCart = $this->getGuestCartMap();
+
         if ($userId !== null) {
-            return $this->cartDAO->countItems($userId);
+            return $this->cartDAO->countItems($userId) + count($guestCart['bundles']);
         }
 
-        return count($this->getGuestCartMap());
+        return count($guestCart['products']) + count($guestCart['bundles']);
     }
 
     // ══════════════════════════════════════════════════════════
@@ -347,6 +576,38 @@ class CustomerCartService
             // 2. Create order items + update stock
             $orderItems = [];
             foreach ($cart['items'] as $item) {
+                if ($item->itemType === 'bundle') {
+                    $bundle = $this->getBundleWithItems((int) $item->bundleId);
+                    if (!$bundle) {
+                        throw new \RuntimeException('Bundle no longer available.');
+                    }
+                    if (!$this->assertBundleStock($bundle, $item->quantity)) {
+                        throw new \RuntimeException('Insufficient stock for bundle items.');
+                    }
+
+                    $pricing = $this->buildBundleUnitPriceMap($bundle['items'] ?? [], (float) ($bundle['bundle_price'] ?? 0));
+                    $lineDefs = $pricing['lines'] ?? [];
+                    $lineUnitPrices = $pricing['unit_prices'] ?? [];
+
+                    foreach ($lineDefs as $productId => $lineDef) {
+                        $qtyPerBundle = max(1, (int) ($lineDef['qty_per_bundle'] ?? 1));
+                        $orderItems[] = [
+                            'product_id' => (int) $productId,
+                            'quantity' => $item->quantity * $qtyPerBundle,
+                            'unit_price' => (float) ($lineUnitPrices[$productId] ?? 0),
+                        ];
+
+                        $currentProduct = $this->productDAO->findById((int) $productId);
+                        if (!$currentProduct) {
+                            throw new \RuntimeException('Bundle product missing during checkout.');
+                        }
+
+                        $newStock = max(0, (int) $currentProduct['stock'] - ($item->quantity * $qtyPerBundle));
+                        $this->productDAO->update((int) $productId, ['stock' => $newStock]);
+                    }
+                    continue;
+                }
+
                 $orderItems[] = [
                     'product_id' => $item->productId,
                     'quantity' => $item->quantity,

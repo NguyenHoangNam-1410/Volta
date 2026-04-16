@@ -23,7 +23,7 @@ class BundleDAO extends BaseDAO
         if (!$bundle) return null;
 
         $stmt = $this->pdo->prepare(
-            "SELECT bi.*, p.name, p.slug, p.price,
+            "SELECT bi.*, p.name, p.slug, p.price, p.stock,
                     (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id AND pi.is_primary = 1 LIMIT 1) AS image_url
              FROM bundle_items bi
              JOIN products p ON bi.product_id = p.id

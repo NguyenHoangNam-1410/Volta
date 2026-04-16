@@ -6,6 +6,8 @@ class CartItemDTO
     public ?int    $id;
     public ?int    $userId;
     public ?int    $productId;
+    public string  $itemType;
+    public ?int    $bundleId;
     public int     $quantity;
     public string  $addedAt;
 
@@ -16,16 +18,23 @@ class CartItemDTO
     public ?int    $productStock = null;
     public ?string $imageUrl     = null;
 
+    public ?string $bundleName   = null;
+    public ?float  $bundlePrice  = null;
+
     public function __construct(
         ?int   $id        = null,
         ?int   $userId    = null,
         ?int   $productId = null,
+        string $itemType  = 'product',
+        ?int   $bundleId  = null,
         int    $quantity  = 1,
         string $addedAt   = ''
     ) {
         $this->id        = $id;
         $this->userId    = $userId;
         $this->productId = $productId;
+        $this->itemType  = $itemType;
+        $this->bundleId  = $bundleId;
         $this->quantity  = $quantity;
         $this->addedAt   = $addedAt ?: date('Y-m-d H:i:s');
     }
@@ -39,6 +48,8 @@ class CartItemDTO
             isset($row['id'])         ? (int)   $row['id']         : null,
             isset($row['user_id'])    ? (int)   $row['user_id']    : null,
             isset($row['product_id']) ? (int)   $row['product_id'] : null,
+            $row['item_type'] ?? 'product',
+            isset($row['bundle_id'])  ? (int)   $row['bundle_id']  : null,
             isset($row['quantity'])   ? (int)   $row['quantity']   : 1,
             $row['added_at'] ?? date('Y-m-d H:i:s')
         );
@@ -50,6 +61,10 @@ class CartItemDTO
         $dto->productStock = isset($row['stock'])  ? (int)   $row['stock'] : null;
         $dto->imageUrl     = $row['image_url']     ?? null;
 
+        // Joined bundle fields
+        $dto->bundleName   = $row['bundle_name'] ?? null;
+        $dto->bundlePrice  = isset($row['bundle_price']) ? (float) $row['bundle_price'] : null;
+
         return $dto;
     }
 
@@ -59,6 +74,8 @@ class CartItemDTO
             $model->getId(),
             $model->getUserId(),
             $model->getProductId(),
+            'product',
+            null,
             (int) $model->getQuantity(),
             $model->getAddedAt()
         );
@@ -69,6 +86,8 @@ class CartItemDTO
         return [
             'user_id'    => $this->userId,
             'product_id' => $this->productId,
+            'item_type'  => $this->itemType,
+            'bundle_id'  => $this->bundleId,
             'quantity'   => $this->quantity,
         ];
     }
