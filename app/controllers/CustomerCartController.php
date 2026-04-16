@@ -24,17 +24,30 @@ class CustomerCartController
 
         // Serialize cart items manually (they have join fields)
         $items = array_map(function ($item) {
-            return [
+            $payload = [
                 'id'            => $item->id,
+                'item_type'     => $item->itemType,
+                'item_id'       => $item->itemType === 'bundle' ? $item->bundleId : $item->productId,
                 'product_id'    => $item->productId,
+                'bundle_id'     => $item->bundleId,
                 'quantity'      => $item->quantity,
-                'product_name'  => $item->productName,
-                'product_slug'  => $item->productSlug,
-                'product_price' => $item->productPrice,
-                'product_stock' => $item->productStock,
                 'image_url'     => $item->imageUrl,
-                'line_total'    => round(($item->productPrice ?? 0) * $item->quantity, 2),
             ];
+
+            if ($item->itemType === 'bundle') {
+                $payload['bundle_name']  = $item->bundleName;
+                $payload['bundle_price'] = $item->bundlePrice;
+                $payload['line_total']   = round(($item->bundlePrice ?? 0) * $item->quantity, 2);
+                return $payload;
+            }
+
+            $payload['product_name']  = $item->productName;
+            $payload['product_slug']  = $item->productSlug;
+            $payload['product_price'] = $item->productPrice;
+            $payload['product_stock'] = $item->productStock;
+            $payload['line_total']    = round(($item->productPrice ?? 0) * $item->quantity, 2);
+
+            return $payload;
         }, $cart['items']);
 
         ApiResponse::success([
@@ -46,19 +59,22 @@ class CustomerCartController
 
     /**
      * POST /api/cart/items
-     * Body: { product_id, quantity? }
+     * Body: { item_type?: product|bundle, product_id?, bundle_id?, quantity? }
      */
     public function add(): void
     {
         $data      = ApiResponse::body();
-        $productId = (int) ($data['product_id'] ?? 0);
+        $itemType  = ($data['item_type'] ?? '') === 'bundle' || isset($data['bundle_id']) ? 'bundle' : 'product';
+        $itemId    = $itemType === 'bundle'
+            ? (int) ($data['bundle_id'] ?? 0)
+            : (int) ($data['product_id'] ?? 0);
         $quantity  = max(1, (int) ($data['quantity'] ?? 1));
 
-        if ($productId <= 0) {
-            ApiResponse::error('Invalid product ID.', 422);
+        if ($itemId <= 0) {
+            ApiResponse::error('Invalid item ID.', 422);
         }
 
-        $result = $this->cartService->addItem(Auth::userId(), $productId, $quantity);
+        $result = $this->cartService->addItem(Auth::userId(), $itemType, $itemId, $quantity);
 
         if (!$result['success']) {
             ApiResponse::error($result['message'], 422);
@@ -71,19 +87,22 @@ class CustomerCartController
 
     /**
      * PUT /api/cart/items
-     * Body: { product_id, quantity }
+     * Body: { item_type?: product|bundle, product_id?|bundle_id?, quantity }
      */
     public function update(): void
     {
         $data      = ApiResponse::body();
-        $productId = (int) ($data['product_id'] ?? 0);
+        $itemType  = ($data['item_type'] ?? '') === 'bundle' || isset($data['bundle_id']) ? 'bundle' : 'product';
+        $itemId    = $itemType === 'bundle'
+            ? (int) ($data['bundle_id'] ?? 0)
+            : (int) ($data['product_id'] ?? 0);
         $quantity  = (int) ($data['quantity'] ?? 0);
 
-        if ($productId <= 0) {
-            ApiResponse::error('Invalid product ID.', 422);
+        if ($itemId <= 0) {
+            ApiResponse::error('Invalid item ID.', 422);
         }
 
-        $result = $this->cartService->updateItem(Auth::userId(), $productId, $quantity);
+        $result = $this->cartService->updateItem(Auth::userId(), $itemType, $itemId, $quantity);
 
         if (!$result['success']) {
             ApiResponse::error($result['message'], 422);
@@ -100,7 +119,12 @@ class CustomerCartController
      */
     public function remove(int $productId): void
     {
-        $result = $this->cartService->removeItem(Auth::userId(), $productId);
+        $itemType = ($_GET['item_type'] ?? 'product') === 'bundle' ? 'bundle' : 'product';
+        $result = $this->cartService->removeItem(Auth::userId(), $itemType, $productId);
+
+        if (!$result['success']) {
+            ApiResponse::error($result['message'], 422);
+        }
 
         ApiResponse::success([
             'subtotal'  => $result['subtotal'] ?? 0,
@@ -129,14 +153,27 @@ class CustomerCartController
 
         // Serialize items
         $items = array_map(function ($item) {
-            return [
+            $payload = [
                 'id'            => $item->id,
+                'item_type'     => $item->itemType,
+                'item_id'       => $item->itemType === 'bundle' ? $item->bundleId : $item->productId,
                 'product_id'    => $item->productId,
+                'bundle_id'     => $item->bundleId,
                 'quantity'      => $item->quantity,
-                'product_name'  => $item->productName,
-                'product_price' => $item->productPrice,
-                'line_total'    => round(($item->productPrice ?? 0) * $item->quantity, 2),
             ];
+
+            if ($item->itemType === 'bundle') {
+                $payload['bundle_name']  = $item->bundleName;
+                $payload['bundle_price'] = $item->bundlePrice;
+                $payload['line_total']   = round(($item->bundlePrice ?? 0) * $item->quantity, 2);
+                return $payload;
+            }
+
+            $payload['product_name']  = $item->productName;
+            $payload['product_price'] = $item->productPrice;
+            $payload['line_total']    = round(($item->productPrice ?? 0) * $item->quantity, 2);
+
+            return $payload;
         }, $data['items']);
 
         ApiResponse::success([

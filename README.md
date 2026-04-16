@@ -243,15 +243,52 @@ Paginated responses include a `pagination` object: `{ page, limit, total }`.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/cart` | Get cart contents |
-| POST | `/api/cart/items` | Add item. Body: `{ product_id, quantity? }` |
-| PUT | `/api/cart/items` | Update quantity. Body: `{ product_id, quantity }` |
-| DELETE | `/api/cart/items/{productId}` | Remove item |
+| POST | `/api/cart/items` | Add product or bundle. Body: `{ item_type?: 'product'|'bundle', product_id?, bundle_id?, quantity? }` |
+| PUT | `/api/cart/items` | Update product or bundle quantity. Body: `{ item_type?: 'product'|'bundle', product_id?|bundle_id?, quantity }` |
+| DELETE | `/api/cart/items/{itemId}?item_type=product|bundle` | Remove product or bundle cart line |
 | DELETE | `/api/cart` | Clear cart |
 | GET | `/api/cart/checkout` | Get checkout data (items + addresses) |
 | POST | `/api/cart/apply-discount` | Validate discount. Body: `{ discount_code, subtotal }` |
 | POST | `/api/cart/place-order` | Place order. Body: `{ address_id?, discount_code? }` |
 | GET | `/api/orders/my` | Customer's order history |
 | GET | `/api/orders/my/{id}` | Customer's order detail |
+
+#### Cart Item Types
+
+The cart now supports two line-item types:
+
+- `product`: regular single product purchase
+- `bundle`: bundle purchase (a single line representing a bundle)
+
+Common cart item response fields:
+
+- `id`
+- `item_type` (`product` or `bundle`)
+- `item_id` (resolved ID from `product_id` or `bundle_id`)
+- `quantity`
+- `image_url`
+- `line_total`
+
+Product-specific fields:
+
+- `product_id`, `product_name`, `product_slug`, `product_price`, `product_stock`
+
+Bundle-specific fields:
+
+- `bundle_id`, `bundle_name`, `bundle_price`
+
+#### Guest Bundle Support
+
+- Guests can add both products and bundles to cart.
+- Product lines for logged-in users are persisted in DB (`cart_items`).
+- Bundle lines are session-backed (`guest_cart`) so guest and logged-in users can both purchase bundles.
+
+#### Checkout Behavior For Bundles
+
+- During checkout, each bundle line is expanded into its component products.
+- Stock is validated for all bundle components before placing order.
+- Stock is decremented per component product quantity.
+- Bundle price is allocated across generated order items so final order total remains consistent.
 
 ### Shop (Public)
 
@@ -310,6 +347,13 @@ Paginated responses include a `pagination` object: `{ page, limit, total }`.
 - Added `CategoryController`, `OrderController`, `BundleController`
 - Session-based auth with JSON 401/403 responses
 - CORS headers for cross-origin frontend consumption
+
+### v3.1.0 — Cart + Bundle purchase enhancements
+- Added mixed cart line support: `product` and `bundle`
+- Added guest bundle-to-cart support
+- Updated cart add/update/remove payloads to support `item_type`
+- Added bundle-aware checkout flow and order item expansion
+- Updated OpenAPI/Swagger cart schemas to reflect mixed cart lines
 
 ### v2.0.0 — Full-stack MVC
 - PHP + Tailwind CSS server-rendered app
