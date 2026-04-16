@@ -32,8 +32,10 @@ class ShopController
             $imagesMap[$productId] = $imgDto ? ApiResponse::dto($imgDto) : null;
         }
 
+        $products = $this->serializeProductsWithImageUrl($result['data'], $result['images']);
+
         ApiResponse::paginated(
-            ApiResponse::dtoList($result['data']),
+            $products,
             [
                 'page'   => $result['page'],
                 'limit'  => $result['limit'],
@@ -53,9 +55,13 @@ class ShopController
             ApiResponse::error('Product not found.', 404);
         }
 
+        $images = ApiResponse::dtoList($data['images']);
+        $product = ApiResponse::dto($data['product']);
+        $product['image_url'] = $this->extractPrimaryImageUrl($images);
+
         ApiResponse::success([
-            'product' => ApiResponse::dto($data['product']),
-            'images'  => ApiResponse::dtoList($data['images']),
+            'product' => $product,
+            'images'  => $images,
         ]);
     }
 
@@ -69,9 +75,13 @@ class ShopController
             ApiResponse::error('Product not found.', 404);
         }
 
+        $images = ApiResponse::dtoList($data['images']);
+        $product = ApiResponse::dto($data['product']);
+        $product['image_url'] = $this->extractPrimaryImageUrl($images);
+
         ApiResponse::success([
-            'product' => ApiResponse::dto($data['product']),
-            'images'  => ApiResponse::dtoList($data['images']),
+            'product' => $product,
+            'images'  => $images,
         ]);
     }
 
@@ -92,7 +102,40 @@ class ShopController
         $badge = $_GET['badge'] ?? 'hot';
         $limit = max(1, min(50, (int) ($_GET['limit'] ?? 8)));
 
-        $products = $this->shopService->getFeatured($badge, $limit);
-        ApiResponse::success(ApiResponse::dtoList($products));
+        $result = $this->shopService->getFeatured($badge, $limit);
+        ApiResponse::success($this->serializeProductsWithImageUrl($result['data'], $result['images']));
+    }
+
+    /**
+     * @param ProductDTO[] $products
+     * @param array<int, ProductImageDTO|null> $images
+     * @return array<int, array<string, mixed>>
+     */
+    private function serializeProductsWithImageUrl(array $products, array $images): array
+    {
+        $payload = [];
+
+        foreach ($products as $dto) {
+            $item = ApiResponse::dto($dto);
+            $imgDto = $images[$dto->id] ?? null;
+            $item['image_url'] = $imgDto ? $imgDto->url : null;
+            $payload[] = $item;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $images
+     */
+    private function extractPrimaryImageUrl(array $images): ?string
+    {
+        foreach ($images as $img) {
+            if (!empty($img['is_primary'])) {
+                return $img['url'] ?? null;
+            }
+        }
+
+        return $images[0]['url'] ?? null;
     }
 }

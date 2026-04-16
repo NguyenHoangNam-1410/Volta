@@ -93,6 +93,21 @@ components:
         is_active:   { type: boolean }
         created_at:  { type: string, format: date-time }
 
+    ShopProduct:
+      allOf:
+        - $ref: '#/components/schemas/Product'
+        - type: object
+          properties:
+            image_url: { type: string, nullable: true }
+
+    ShopProductDetail:
+      type: object
+      properties:
+        product: { $ref: '#/components/schemas/ShopProduct' }
+        images:
+          type: array
+          items: { $ref: '#/components/schemas/ProductImage' }
+
     ProductImage:
       type: object
       properties:
@@ -154,11 +169,18 @@ components:
       properties:
         id:          { type: integer }
         name:        { type: string }
-        slug:        { type: string }
         description: { type: string }
-        price:       { type: number, format: float }
+        bundle_price: { type: number, format: float }
         is_active:   { type: boolean }
-        created_at:  { type: string, format: date-time }
+
+    BundleItemProduct:
+      type: object
+      properties:
+        id:        { type: integer }
+        name:      { type: string }
+        slug:      { type: string }
+        price:     { type: number, format: float, nullable: true }
+        image_url: { type: string, nullable: true }
 
     BundleItem:
       type: object
@@ -166,7 +188,18 @@ components:
         id:         { type: integer }
         bundle_id:  { type: integer }
         product_id: { type: integer }
-        quantity:   { type: integer }
+        product:
+          allOf:
+            - $ref: '#/components/schemas/BundleItemProduct'
+          nullable: true
+
+    BundleDetail:
+      type: object
+      properties:
+        bundle: { $ref: '#/components/schemas/Bundle' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/BundleItem' }
 
     CartItem:
       type: object
@@ -627,10 +660,10 @@ paths:
 
     get:
       tags: [Product Relations]
-      summary: List product relations (Admin)
+      summary: List related products (Admin)
       responses:
         "200":
-          description: Relation list
+          description: Related product list
           content:
             application/json:
               schema:
@@ -640,7 +673,7 @@ paths:
                     properties:
                       data:
                         type: array
-                        items: { $ref: '#/components/schemas/ProductRelation' }
+                        items: { $ref: '#/components/schemas/Product' }
 
     post:
       tags: [Product Relations]
@@ -651,9 +684,12 @@ paths:
           application/json:
             schema:
               type: object
-              required: [related_product_id]
+              required: [related_id]
               properties:
-                related_product_id: { type: integer }
+                related_id: { type: integer }
+                type: { type: string, enum: [upsell, crosssell], default: crosssell }
+                discount_amount: { type: number, format: float, default: 0 }
+                sort_order: { type: integer, default: 0 }
       responses:
         "201": { description: Relation added }
 
@@ -1039,13 +1075,15 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name, price]
+              required: [name, bundle_price]
               properties:
                 name:        { type: string }
-                slug:        { type: string }
                 description: { type: string }
-                price:       { type: number, format: float }
+                bundle_price: { type: number, format: float }
                 is_active:   { type: boolean }
+                product_ids:
+                  type: array
+                  items: { type: integer }
       responses:
         "201": { description: Bundle created }
 
@@ -1087,7 +1125,7 @@ paths:
                   - $ref: '#/components/schemas/SuccessResponse'
                   - type: object
                     properties:
-                      data: { $ref: '#/components/schemas/Bundle' }
+                      data: { $ref: '#/components/schemas/BundleDetail' }
         "404": { $ref: '#/components/responses/NotFound' }
 
     put:
@@ -1100,10 +1138,12 @@ paths:
               type: object
               properties:
                 name:        { type: string }
-                slug:        { type: string }
                 description: { type: string }
-                price:       { type: number, format: float }
+                bundle_price: { type: number, format: float }
                 is_active:   { type: boolean }
+                product_ids:
+                  type: array
+                  items: { type: integer }
       responses:
         "200": { description: Bundle updated }
 
@@ -1146,10 +1186,9 @@ paths:
           application/json:
             schema:
               type: object
-              required: [product_id, quantity]
+              required: [product_id]
               properties:
                 product_id: { type: integer }
-                quantity:   { type: integer, minimum: 1 }
       responses:
         "201": { description: Item added }
 
@@ -1197,7 +1236,7 @@ paths:
                     properties:
                       data:
                         type: array
-                        items: { $ref: '#/components/schemas/Product' }
+                        items: { $ref: '#/components/schemas/ShopProduct' }
                       meta: { $ref: '#/components/schemas/PaginatedMeta' }
 
   /api/shop/products/{id}:
@@ -1220,7 +1259,7 @@ paths:
                   - $ref: '#/components/schemas/SuccessResponse'
                   - type: object
                     properties:
-                      data: { $ref: '#/components/schemas/Product' }
+                      data: { $ref: '#/components/schemas/ShopProductDetail' }
         "404": { $ref: '#/components/responses/NotFound' }
 
   /api/shop/categories:
@@ -1257,7 +1296,7 @@ paths:
                     properties:
                       data:
                         type: array
-                        items: { $ref: '#/components/schemas/Product' }
+                        items: { $ref: '#/components/schemas/ShopProduct' }
 
   # ══════════════════════════════════════════════════════════
   # CART  (Authenticated Customer)

@@ -23,12 +23,12 @@ class ProductRelationDAO extends BaseDAO
     }
 
     /**
-     * Find related products by type, joined with product details.
+     * Find related products by type.
      */
     private function findRelated(int $productId, string $type): array
     {
         $stmt = $this->pdo->prepare(
-            "SELECT pr.*, p.name, p.slug, p.price, p.badge,
+            "SELECT p.*,
                     (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id AND pi.is_primary = 1 LIMIT 1) AS image_url
              FROM {$this->table} pr
              JOIN products p ON pr.related_id = p.id

@@ -266,22 +266,22 @@ class ProductService
 
     /**
      * Get upsell products for a given product.
-     * @return ProductRelationDTO[]
+     * @return ProductDTO[]
      */
     public function getUpsells(int $productId): array
     {
         $rows = $this->relationDAO->findUpsells($productId);
-        return array_map([ProductRelationDTO::class, 'fromArray'], $rows);
+        return array_map([ProductDTO::class, 'fromArray'], $rows);
     }
 
     /**
      * Get cross-sell products for a given product.
-     * @return ProductRelationDTO[]
+     * @return ProductDTO[]
      */
     public function getCrossSells(int $productId): array
     {
         $rows = $this->relationDAO->findCrossSells($productId);
-        return array_map([ProductRelationDTO::class, 'fromArray'], $rows);
+        return array_map([ProductDTO::class, 'fromArray'], $rows);
     }
 
     /**

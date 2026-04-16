@@ -45,12 +45,7 @@ class ShopService
         // Map to DTOs
         $products = array_map([ProductDTO::class, 'fromArray'], $result['data']);
 
-        // Load primary images
-        $images = [];
-        foreach ($products as $dto) {
-            $imgRow = $this->imageDAO->findPrimary($dto->id);
-            $images[$dto->id] = $imgRow ? ProductImageDTO::fromArray($imgRow) : null;
-        }
+        $images = $this->buildPrimaryImagesMap($products);
 
         return [
             'data' => $products,
@@ -119,11 +114,33 @@ class ShopService
 
     /**
      * Get featured products by badge.
-     * @return ProductDTO[]
+     * Returns ['data' => ProductDTO[], 'images' => array<int, ProductImageDTO|null>]
      */
     public function getFeatured(string $badge = 'hot', int $limit = 8): array
     {
         $rows = $this->productDAO->findByBadge($badge, $limit);
-        return array_map([ProductDTO::class, 'fromArray'], $rows);
+        $products = array_map([ProductDTO::class, 'fromArray'], $rows);
+
+        return [
+            'data' => $products,
+            'images' => $this->buildPrimaryImagesMap($products),
+        ];
+    }
+
+    /**
+     * Build map of product_id => primary image DTO (or null).
+     *
+     * @param ProductDTO[] $products
+     * @return array<int, ProductImageDTO|null>
+     */
+    private function buildPrimaryImagesMap(array $products): array
+    {
+        $images = [];
+        foreach ($products as $dto) {
+            $imgRow = $this->imageDAO->findPrimary($dto->id);
+            $images[$dto->id] = $imgRow ? ProductImageDTO::fromArray($imgRow) : null;
+        }
+
+        return $images;
     }
 }
