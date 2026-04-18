@@ -24,7 +24,8 @@ class BundleService
     public function getAll(): array
     {
         $rows = $this->bundleDAO->findAll('id', 'DESC');
-        return array_map([BundleDTO::class, 'fromArray'], $rows);
+        $bundles = array_map([BundleDTO::class, 'fromArray'], $rows);
+        return $this->withSavings($bundles);
     }
 
     /**
@@ -34,7 +35,8 @@ class BundleService
     public function getActive(): array
     {
         $rows = $this->bundleDAO->findActive();
-        return array_map([BundleDTO::class, 'fromArray'], $rows);
+        $bundles = array_map([BundleDTO::class, 'fromArray'], $rows);
+        return $this->withSavings($bundles);
     }
 
     /**
@@ -43,7 +45,13 @@ class BundleService
     public function getById(int $id): ?BundleDTO
     {
         $row = $this->bundleDAO->findById($id);
-        return $row ? BundleDTO::fromArray($row) : null;
+        if (!$row) {
+            return null;
+        }
+
+        $bundle = BundleDTO::fromArray($row);
+        $bundles = $this->withSavings([$bundle]);
+        return $bundles[0] ?? $bundle;
     }
 
     /**
@@ -59,6 +67,13 @@ class BundleService
         $bundle = BundleDTO::fromArray($data);
         $items = array_map([BundleItemDTO::class, 'fromArray'], $data['items'] ?? []);
 
+        $totalProductPrice = 0.0;
+        foreach ($items as $item) {
+            $totalProductPrice += (float) ($item->productPrice ?? 0);
+        }
+        $bundle->totalProductPrice = $totalProductPrice;
+        $bundle->offPercentage = $this->calculateOffPercentage($totalProductPrice, $bundle->bundlePrice);
+
         return ['bundle' => $bundle, 'items' => $items];
     }
 
@@ -69,7 +84,8 @@ class BundleService
     public function paginate(int $page = 1, int $limit = 20): array
     {
         $result = $this->bundleDAO->paginate($page, $limit, [], 'id', 'DESC');
-        $result['data'] = array_map([BundleDTO::class, 'fromArray'], $result['data']);
+        $bundles = array_map([BundleDTO::class, 'fromArray'], $result['data']);
+        $result['data'] = $this->withSavings($bundles);
         return $result;
     }
 
@@ -184,5 +200,46 @@ class BundleService
     {
         $rows = $this->bundleItemDAO->findByProduct($productId);
         return array_map([BundleItemDTO::class, 'fromArray'], $rows);
+    }
+
+    /**
+     * Attach computed savings fields for FE cards/tables.
+     * @param BundleDTO[] $bundles
+     * @return BundleDTO[]
+     */
+    private function withSavings(array $bundles): array
+    {
+        if (empty($bundles)) {
+            return $bundles;
+        }
+
+        $bundleIds = array_values(array_filter(array_map(
+            static fn(BundleDTO $bundle): ?int => $bundle->id,
+            $bundles
+        )));
+
+        $priceMap = $this->bundleDAO->getTotalProductPriceMap($bundleIds);
+
+        foreach ($bundles as $bundle) {
+            $totalProductPrice = (float) ($priceMap[$bundle->id ?? 0] ?? 0.0);
+            $bundle->totalProductPrice = $totalProductPrice;
+            $bundle->offPercentage = $this->calculateOffPercentage($totalProductPrice, $bundle->bundlePrice);
+        }
+
+        return $bundles;
+    }
+
+    private function calculateOffPercentage(float $totalProductPrice, float $bundlePrice): float
+    {
+        if ($totalProductPrice <= 0) {
+            return 0.0;
+        }
+
+        $off = (($totalProductPrice - $bundlePrice) / $totalProductPrice) * 100;
+        if ($off < 0) {
+            $off = 0.0;
+        }
+
+        return round($off, 2);
     }
 }

@@ -84,4 +84,130 @@ class OrderDAO extends BaseDAO
         $stmt->execute($params);
         return $stmt->fetch(PDO::FETCH_ASSOC);
     }
+
+    /**
+     * Revenue grouped by day for the last N days (including today).
+     */
+    public function getRevenueLastNDays(int $days = 7): array
+    {
+        $days = max(1, $days);
+
+        $stmt = $this->pdo->prepare(
+            "SELECT DATE(created_at) AS order_date,
+                    COALESCE(SUM(total_price), 0) AS amount
+             FROM {$this->table}
+             WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
+             GROUP BY DATE(created_at)
+             ORDER BY order_date ASC"
+        );
+        $stmt->bindValue(':days', $days - 1, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Revenue grouped by day for an explicit date range.
+     */
+    public function getRevenueByDateRange(string $startDate, string $endDate): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT DATE(created_at) AS order_date,
+                    COALESCE(SUM(total_price), 0) AS amount
+             FROM {$this->table}
+             WHERE created_at >= :start AND created_at <= :end
+             GROUP BY DATE(created_at)
+             ORDER BY order_date ASC"
+        );
+        $stmt->execute([
+            ':start' => $startDate,
+            ':end' => $endDate,
+        ]);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Most recent orders with customer display information.
+     */
+    public function getRecentOrders(int $limit = 10, ?string $startDate = null, ?string $endDate = null): array
+    {
+        $limit = max(1, $limit);
+
+        $where = [];
+        $params = [];
+        if ($startDate !== null) {
+            $where[] = 'o.created_at >= :start';
+            $params[':start'] = $startDate;
+        }
+        if ($endDate !== null) {
+            $where[] = 'o.created_at <= :end';
+            $params[':end'] = $endDate;
+        }
+
+        $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+
+        $stmt = $this->pdo->prepare(
+            "SELECT o.id,
+                    o.total_price,
+                    o.status,
+                    o.created_at,
+                    COALESCE(u.full_name, 'Guest') AS customer
+             FROM {$this->table} o
+             LEFT JOIN users u ON o.user_id = u.id
+             {$whereSql}
+             ORDER BY o.created_at DESC
+             LIMIT :limit"
+        );
+        foreach ($params as $key => $value) {
+            $stmt->bindValue($key, $value);
+        }
+        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Top-selling products by quantity, excluding cancelled orders.
+     */
+    public function getTopProducts(int $limit = 10, ?string $startDate = null, ?string $endDate = null): array
+    {
+        $limit = max(1, $limit);
+
+        $where = ['o.status <> \'cancelled\''];
+        $params = [];
+        if ($startDate !== null) {
+            $where[] = 'o.created_at >= :start';
+            $params[':start'] = $startDate;
+        }
+        if ($endDate !== null) {
+            $where[] = 'o.created_at <= :end';
+            $params[':end'] = $endDate;
+        }
+
+        $whereSql = 'WHERE ' . implode(' AND ', $where);
+
+        $stmt = $this->pdo->prepare(
+            "SELECT p.id AS product_id,
+                    p.name AS product,
+                    p.price,
+                    p.stock,
+                    COALESCE(SUM(oi.quantity), 0) AS sold_quantity
+             FROM order_items oi
+             JOIN orders o ON oi.order_id = o.id
+             JOIN products p ON oi.product_id = p.id
+             {$whereSql}
+             GROUP BY p.id, p.name, p.price, p.stock
+             ORDER BY sold_quantity DESC, p.id ASC
+             LIMIT :limit"
+        );
+        foreach ($params as $key => $value) {
+            $stmt->bindValue($key, $value);
+        }
+        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
 }

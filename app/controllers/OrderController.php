@@ -163,8 +163,11 @@ class OrderController
 
         $startDate = $_GET['start_date'] ?? null;
         $endDate   = $_GET['end_date'] ?? null;
+        $days = max(1, min(60, (int) ($_GET['days'] ?? 7)));
+        $recentLimit = max(1, min(50, (int) ($_GET['recent_limit'] ?? 10)));
+        $topLimit = max(1, min(50, (int) ($_GET['top_limit'] ?? 10)));
 
-        $stats = $this->orderService->getStats($startDate, $endDate);
+        $stats = $this->orderService->getStats($startDate, $endDate, $days, $recentLimit, $topLimit);
         ApiResponse::success($stats);
     }
 }

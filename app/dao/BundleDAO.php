@@ -35,4 +35,41 @@ class BundleDAO extends BaseDAO
 
         return $bundle;
     }
+
+    /**
+     * Sum product prices per bundle.
+     * Returns map: [bundle_id => total_product_price].
+     */
+    public function getTotalProductPriceMap(array $bundleIds): array
+    {
+        if (empty($bundleIds)) {
+            return [];
+        }
+
+        $bundleIds = array_values(array_unique(array_map('intval', $bundleIds)));
+        $placeholders = [];
+        foreach ($bundleIds as $idx => $id) {
+            $placeholders[] = ':b' . $idx;
+        }
+
+        $sql = "SELECT bi.bundle_id, COALESCE(SUM(p.price), 0) AS total_product_price
+                FROM bundle_items bi
+                JOIN products p ON p.id = bi.product_id
+                WHERE bi.bundle_id IN (" . implode(', ', $placeholders) . ")
+                GROUP BY bi.bundle_id";
+
+        $stmt = $this->pdo->prepare($sql);
+        foreach ($bundleIds as $idx => $id) {
+            $stmt->bindValue(':b' . $idx, $id, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int) $row['bundle_id']] = (float) $row['total_product_price'];
+        }
+
+        return $map;
+    }
 }
