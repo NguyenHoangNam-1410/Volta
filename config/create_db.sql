@@ -1,3 +1,7 @@
+DROP DATABASE IF EXISTS volta;
+CREATE DATABASE volta CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE volta;
+
 -- ── CATEGORIES ──────────────────────────────────────────────
 CREATE TABLE categories (
     id          INT PRIMARY KEY AUTO_INCREMENT,

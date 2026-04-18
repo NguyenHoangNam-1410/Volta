@@ -164,6 +164,63 @@ components:
         quantity:    { type: integer }
         unit_price:  { type: number, format: float }
 
+    AdminRevenueDay:
+      type: object
+      properties:
+        date: { type: string, format: date, example: "2026-04-18" }
+        day_of_week: { type: string, example: "Sat" }
+        amount: { type: number, format: float, example: 1299.0 }
+
+    AdminRecentOrder:
+      type: object
+      properties:
+        order_id: { type: integer, example: 1201 }
+        customer: { type: string, example: "Alice Nguyen" }
+        total: { type: number, format: float, example: 349.0 }
+        status: { type: string, enum: [pending, paid, shipped, delivered, cancelled] }
+        date: { type: string, format: date-time }
+
+    AdminTopProduct:
+      type: object
+      properties:
+        product_id: { type: integer, example: 14 }
+        product: { type: string, example: "KeyFlow 75%" }
+        price: { type: number, format: float, example: 189.0 }
+        stock: { type: integer, example: 55 }
+        sold_quantity: { type: integer, example: 123 }
+
+    AdminEffectiveFilter:
+      type: object
+      properties:
+        mode: { type: string, enum: [date_range, last_n_days] }
+        start_date: { type: string, format: date-time, example: "2026-04-12 00:00:00" }
+        end_date: { type: string, format: date-time, example: "2026-04-18 23:59:59" }
+        days: { type: integer, example: 7 }
+
+    AdminOrderStats:
+      type: object
+      properties:
+        total_orders: { type: integer, example: 42 }
+        total_revenue: { type: number, format: float, example: 12026.0 }
+        completed_orders: { type: integer, example: 19 }
+        cancelled_orders: { type: integer, example: 2 }
+        effective_filter:
+          $ref: '#/components/schemas/AdminEffectiveFilter'
+        revenue_window_days: { type: integer, example: 7 }
+        revenue_by_day:
+          type: array
+          items: { $ref: '#/components/schemas/AdminRevenueDay' }
+        revenue_last_7_days:
+          description: Backward-compatible alias of revenue_by_day.
+          type: array
+          items: { $ref: '#/components/schemas/AdminRevenueDay' }
+        recent_orders:
+          type: array
+          items: { $ref: '#/components/schemas/AdminRecentOrder' }
+        top_products:
+          type: array
+          items: { $ref: '#/components/schemas/AdminTopProduct' }
+
     Bundle:
       type: object
       properties:
@@ -968,13 +1025,44 @@ paths:
     get:
       tags: [Admin Orders]
       summary: Order statistics (Admin)
+      parameters:
+        - name: start_date
+          in: query
+          required: false
+          description: Optional inclusive lower bound. Use together with end_date to activate date_range mode.
+          schema: { type: string }
+        - name: end_date
+          in: query
+          required: false
+          description: Optional inclusive upper bound. Use together with start_date to activate date_range mode.
+          schema: { type: string }
+        - name: days
+          in: query
+          required: false
+          description: Revenue chart window size (1-60), default 7. Ignored when both start_date and end_date are provided.
+          schema: { type: integer, minimum: 1, maximum: 60, default: 7 }
+        - name: recent_limit
+          in: query
+          required: false
+          description: Number of recent orders to return (1-50), default 10
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+        - name: top_limit
+          in: query
+          required: false
+          description: Number of top products to return (1-50), default 10
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
       responses:
         "200":
-          description: Aggregated order stats
+          description: Aggregated order stats with dashboard widgets
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SuccessResponse'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AdminOrderStats'
 
   /api/admin/orders/{id}:
     parameters:

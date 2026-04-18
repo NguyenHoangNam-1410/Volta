@@ -91,9 +91,120 @@ class OrderService
     /**
      * Get order statistics (revenue, counts).
      */
-    public function getStats(?string $startDate = null, ?string $endDate = null): array
+    public function getStats(
+        ?string $startDate = null,
+        ?string $endDate = null,
+        int $days = 7,
+        int $recentLimit = 10,
+        int $topLimit = 10
+    ): array
     {
-        return $this->orderDAO->getStats($startDate, $endDate);
+        $days = max(1, min(60, $days));
+        $recentLimit = max(1, min(50, $recentLimit));
+        $topLimit = max(1, min(50, $topLimit));
+
+        $startDate = $this->normalizeStartDate($startDate);
+        $endDate = $this->normalizeEndDate($endDate);
+
+        $useManualRange = $startDate !== null && $endDate !== null;
+        if ($useManualRange && strtotime($startDate) > strtotime($endDate)) {
+            [$startDate, $endDate] = [$endDate, $startDate];
+        }
+
+        if ($useManualRange) {
+            $effectiveStart = $startDate;
+            $effectiveEnd = $endDate;
+            $effectiveDays = (int) floor((strtotime(substr($effectiveEnd, 0, 10)) - strtotime(substr($effectiveStart, 0, 10))) / 86400) + 1;
+            $effectiveDays = max(1, min(60, $effectiveDays));
+            $revenueRows = $this->orderDAO->getRevenueByDateRange($effectiveStart, $effectiveEnd);
+        } else {
+            $effectiveDays = $days;
+            $effectiveStart = date('Y-m-d 00:00:00', strtotime('-' . ($effectiveDays - 1) . ' days'));
+            $effectiveEnd = date('Y-m-d 23:59:59');
+            $revenueRows = $this->orderDAO->getRevenueLastNDays($effectiveDays);
+            $startDate = $effectiveStart;
+            $endDate = $effectiveEnd;
+        }
+
+        $summary = $this->orderDAO->getStats($startDate, $endDate);
+        $revenueMap = [];
+        foreach ($revenueRows as $row) {
+            $revenueMap[$row['order_date']] = (float) $row['amount'];
+        }
+
+        $revenueByDay = [];
+        $cursorDate = substr($effectiveStart, 0, 10);
+        $lastDate = substr($effectiveEnd, 0, 10);
+        while (strtotime($cursorDate) <= strtotime($lastDate)) {
+            $revenueByDay[] = [
+                'date' => $cursorDate,
+                'day_of_week' => date('D', strtotime($cursorDate)),
+                'amount' => $revenueMap[$cursorDate] ?? 0.0,
+            ];
+            $cursorDate = date('Y-m-d', strtotime($cursorDate . ' +1 day'));
+        }
+
+        $recentOrders = array_map(static function ($row): array {
+            return [
+                'order_id' => (int) $row['id'],
+                'customer' => (string) $row['customer'],
+                'total' => (float) $row['total_price'],
+                'status' => (string) $row['status'],
+                'date' => (string) $row['created_at'],
+            ];
+        }, $this->orderDAO->getRecentOrders($recentLimit, $startDate, $endDate));
+
+        $topProducts = array_map(static function ($row): array {
+            return [
+                'product_id' => (int) $row['product_id'],
+                'product' => (string) $row['product'],
+                'price' => (float) $row['price'],
+                'stock' => (int) $row['stock'],
+                'sold_quantity' => (int) $row['sold_quantity'],
+            ];
+        }, $this->orderDAO->getTopProducts($topLimit, $startDate, $endDate));
+
+        return [
+            'total_orders' => (int) ($summary['total_orders'] ?? 0),
+            'total_revenue' => (float) ($summary['total_revenue'] ?? 0),
+            'completed_orders' => (int) ($summary['completed_orders'] ?? 0),
+            'cancelled_orders' => (int) ($summary['cancelled_orders'] ?? 0),
+            'effective_filter' => [
+                'mode' => $useManualRange ? 'date_range' : 'last_n_days',
+                'start_date' => $effectiveStart,
+                'end_date' => $effectiveEnd,
+                'days' => $effectiveDays,
+            ],
+            'revenue_window_days' => $effectiveDays,
+            'revenue_by_day' => $revenueByDay,
+            'revenue_last_7_days' => $revenueByDay,
+            'recent_orders' => $recentOrders,
+            'top_products' => $topProducts,
+        ];
+    }
+
+    private function normalizeStartDate(?string $value): ?string
+    {
+        if ($value === null || trim($value) === '') {
+            return null;
+        }
+        $trimmed = trim($value);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $trimmed) === 1) {
+            return $trimmed . ' 00:00:00';
+        }
+        return $trimmed;
+    }
+
+    private function normalizeEndDate(?string $value): ?string
+    {
+        if ($value === null || trim($value) === '') {
+            return null;
+        }
+        $trimmed = trim($value);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $trimmed) === 1) {
+            return $trimmed . ' 23:59:59';
+        }
+        return $trimmed;
     }
 
     // ── WRITE ────────────────────────────────────────────────
