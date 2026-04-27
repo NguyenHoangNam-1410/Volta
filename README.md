@@ -232,6 +232,7 @@ Paginated responses include a `pagination` object: `{ page, limit, total }`.
 |--------|----------|-------------|
 | GET | `/api/admin/orders` | List orders (`?status=&page=&limit=`) |
 | GET | `/api/admin/orders/stats` | Revenue & count stats (`?start_date=&end_date=`) |
+| GET | `/api/admin/price-alerts` | AI-driven price recommendations based on sales data |
 | GET | `/api/admin/orders/{id}` | Get order + items |
 | POST | `/api/admin/orders` | Create order manually |
 | PUT | `/api/admin/orders/{id}` | Update order |
@@ -339,14 +340,10 @@ Bundle-specific fields:
 
 ## Version History
 
-### v3.0.0 (Current) — Backend API rewrite
-- Converted from full-stack MVC to backend-only REST API
-- All endpoints return JSON (no HTML views)
-- New layered architecture: Controller → Service → DAO → DTO
-- Added `ApiResponse` helper for consistent response envelope
-- Added `CategoryController`, `OrderController`, `BundleController`
-- Session-based auth with JSON 401/403 responses
-- CORS headers for cross-origin frontend consumption
+### v3.2.0 (Current) — Price Alert & Recommendations System
+- Added automated analytics to track product performance (Sell-through rate, Demand velocity, Stock days).
+- Introduced `/api/admin/price-alerts` endpoint to classify products into Increase, Decrease, Clearance, or Review categories.
+- Dashboard integration with visual severity indicators and dynamic date-range filtering.
 
 ### v3.1.0 — Cart + Bundle purchase enhancements
 - Added mixed cart line support: `product` and `bundle`
@@ -354,6 +351,15 @@ Bundle-specific fields:
 - Updated cart add/update/remove payloads to support `item_type`
 - Added bundle-aware checkout flow and order item expansion
 - Updated OpenAPI/Swagger cart schemas to reflect mixed cart lines
+
+### v3.0.0  — Backend API rewrite
+- Converted from full-stack MVC to backend-only REST API
+- All endpoints return JSON (no HTML views)
+- New layered architecture: Controller → Service → DAO → DTO
+- Added `ApiResponse` helper for consistent response envelope
+- Added `CategoryController`, `OrderController`, `BundleController`
+- Session-based auth with JSON 401/403 responses
+- CORS headers for cross-origin frontend consumption
 
 ### v2.0.0 — Full-stack MVC
 - PHP + Tailwind CSS server-rendered app
