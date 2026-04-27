@@ -65,6 +65,7 @@ $router->delete('/^\/api\/discounts\/(\d+)$/',        'DiscountController@destro
 // ╚═══════════════════════════════════════════════════════════╝
 $router->get('/api/admin/orders',                         'OrderController@index');
 $router->get('/api/admin/orders/stats',                   'OrderController@stats');
+$router->get('/api/admin/price-alerts',                   'PriceAlertController@index');
 $router->get('/^\/api\/admin\/orders\/(\d+)$/',           'OrderController@show');
 $router->post('/api/admin/orders',                        'OrderController@store');
 $router->put('/^\/api\/admin\/orders\/(\d+)$/',           'OrderController@update');
